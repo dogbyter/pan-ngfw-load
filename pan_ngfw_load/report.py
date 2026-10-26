@@ -208,6 +208,8 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
                   + (", with sub-interface detail" if ctx.settings.get("subinterfaces") else "")
                   + (" - run with --extended for drops/errors, interfaces, IPsec VPN and capacity"
                      if ctx.settings.get("report_kind") == "standard" else ""), STY["subtitle"]),
+        Paragraph(f"Created with pan-ngfw-load {__version__} - an independent tool, not an official Palo Alto "
+                  "Networks product (see the appendix).", STY["small"]),
         Spacer(1, 14), ctx.h1("Summary of findings"),
     ]
     order = {"warning": 0, "notice": 1, "info": 2}

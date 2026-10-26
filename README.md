@@ -1,5 +1,7 @@
 # pan-ngfw-load – PAN-OS load analysis
 
+> **Disclaimer:** pan-ngfw-load is an independent tool, **not an official Palo Alto Networks product**. It is not affiliated with, endorsed or supported by Palo Alto Networks. Use it at your own risk - MIT license, no warranty. It contains and uses no non-public data ([sources](docs/SOURCES.md)).
+
 `pan-ngfw-load` turns a Palo Alto Networks **tech support file (TSF)** into a PDF report: how busy the **dataplane** (DP) and **management plane** (MP) are, **which traffic causes the load**, and whether **single DP cores spike** above the rest. It works completely **offline**: no access to the firewall, no API key, no cron job.
 
 Everything is read from the TSF itself, so you can analyse a file a customer or colleague sent you, on any Linux/macOS host. Reports come out as PDF (with charts), CSV tables and a findings summary (`findings.txt` / `findings.json`).

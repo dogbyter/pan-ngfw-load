@@ -31,6 +31,7 @@ import re
 import shutil
 import signal
 import subprocess
+import textwrap
 import sys
 import time
 import warnings
@@ -463,14 +464,20 @@ def cmd_capacity(cfg, args) -> int:
     return 0
 
 
+DISCLAIMER = ("pan-ngfw-load is an independent tool, not an official Palo Alto Networks product - not affiliated "
+              "with,\nendorsed or supported by Palo Alto Networks. MIT license, no warranty.")
+
+
 def main(argv=None) -> int:
     live = live_installed()
     ap = argparse.ArgumentParser(
         prog="pan-ngfw-load",
-        description=("PAN-OS load analysis: offline (tech support files) and live (read-only XML API)." if live else
-                     "PAN-OS load analysis of tech support files (TSF-only installation; the live commands "
-                     "are not installed - run install.sh without --tsf-only to add them)."),
-        epilog="Details for one command: pan-ngfw-load -h <command>.  Documentation: README.md, docs/SETUP.md")
+        description=textwrap.fill("PAN-OS load analysis: offline (tech support files) and live (read-only XML API)."
+                                  if live else
+                                  "PAN-OS load analysis of tech support files (TSF-only installation; the live "
+                                  "commands are not installed - run install.sh without --tsf-only to add them).", 100),
+        epilog="Details for one command: pan-ngfw-load -h <command>.  Documentation: README.md, docs/SETUP.md\n\n"
+               + DISCLAIMER, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-c", "--config", type=Path, help=f"config file (default: {C.DEFAULT_PATH}, or $PAN_NGFW_LOAD_CONFIG)"
                     + ("" if live else "; optional - only data_dir/report_dir are used"))
     ap.add_argument("-v", "--verbose", action="store_true", help="show progress in the terminal and log debug details")
@@ -482,7 +489,7 @@ def main(argv=None) -> int:
                     help="detailed statistics of every sub-interface and VLAN interface - same as --subinterfaces "
                          "after 'tsf' or 'report'")
     ap.add_argument("-V", "--version", action="version",
-                    version=f"pan-ngfw-load {__version__}" + ("" if live else " (TSF-only)"))
+                    version=f"pan-ngfw-load {__version__}" + ("" if live else " (TSF-only)") + "\n" + DISCLAIMER)
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="command", title="commands")
 
     def dev_arg(p):
