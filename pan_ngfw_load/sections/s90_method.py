@@ -26,8 +26,9 @@ SOURCES = [
 NOTICE = (
     "pan-ngfw-load contains and uses <b>no non-public data</b>. Everything this report shows about the firewall comes "
     "from the firewall itself - its tech support file or its read-only XML API. Datasheet values come only from the "
-    "public product comparison of Palo Alto Networks, fetched on request ('pan-ngfw-load capacity update'); they are "
-    "not part of pan-ngfw-load. Counter descriptions are those PAN-OS reports itself. The meaning of dataplane "
+    "public product comparison of Palo Alto Networks: a snapshot of it ships with pan-ngfw-load (with its retrieval "
+    "date), current values are fetched with 'pan-ngfw-load capacity update'. They are Palo Alto Networks' published "
+    "figures, unchanged except for unit conversion. Counter descriptions are those PAN-OS reports itself. The meaning of dataplane "
     "functions, resources and management-plane processes is inferred from their names and observed behaviour and is "
     "marked as such - it is not vendor documentation. The parsers were developed and tested with tech support files "
     "of firewalls the authors have access to; those files are not part of pan-ngfw-load and nothing from them is "

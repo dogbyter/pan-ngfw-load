@@ -167,6 +167,17 @@ else
 fi
 
 ln -sf "$PREFIX/bin/pan-ngfw-load" "$BINDIR/pan-ngfw-load"
+
+# --- model limits ------------------------------------------------------------------
+# A snapshot of the public product comparison ships with pan-ngfw-load; fetch the current values right away.
+if "$PREFIX/.venv/bin/python" -c "import pandas, matplotlib, reportlab" 2>/dev/null; then
+    echo
+    echo "Fetching the current model limits (public product comparison on paloaltonetworks.com) ..."
+    if ! "$PREFIX/bin/pan-ngfw-load" capacity update; then
+        echo "Could not fetch them (offline or proxy?) - the snapshot shipped with pan-ngfw-load is used until you run:"
+        echo "  pan-ngfw-load capacity update"
+    fi
+fi
 echo
 if [ "$TSF_ONLY" = 1 ]; then
     echo "Installed (TSF-only). Next step:  pan-ngfw-load tsf <techsupport.tgz>"

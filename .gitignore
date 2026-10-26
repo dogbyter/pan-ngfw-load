@@ -1,4 +1,4 @@
-data/
-reports/
-.venv/
+/data/
+/reports/
+/.venv/
 __pycache__/

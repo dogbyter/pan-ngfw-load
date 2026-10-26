@@ -1,7 +1,8 @@
 """Model limits (datasheet values) from the public product comparison on paloaltonetworks.com - the only source.
 
-`pan-ngfw-load capacity update` fetches it once into a local CSV (fetch_public). Nothing is built in and nothing is
-fetched automatically. Where the public data has no value for a model or an item, the report says so and that item
+A snapshot of it ships with pan-ngfw-load (data/public-product-comparison.csv, refreshed with every release);
+`pan-ngfw-load capacity update` fetches the current values into a local CSV (fetch_public, run by install.sh).
+Local values win; the snapshot fills models and values the local file doesn't have. Where the public data has no value for a model or an item, the report says so and that item
 is not compared against a datasheet value (limits the firewall reports itself are still used).
 """
 
@@ -20,6 +21,7 @@ PUBLIC_FILE = "public-product-comparison.csv"
 PUBLIC_SOURCE = "paloaltonetworks.com product comparison"
 PUBLIC_DATA_URL = ("https://www.paloaltonetworks.com/apps/pan/public/solr/proxy?corename=productcompare&q=*:*"
                    "&fq=language:%22en_US%22&rows=500&start=0&wt=json")
+BUNDLED_FILE = Path(__file__).parent / "data" / "public-product-comparison.csv"
 PUBLIC_FEATURES_URL = "https://www.paloaltonetworks.com/apps/productcompare/getfeatures?lang=en_US"
 
 # field id of the public product comparison -> metric
@@ -141,8 +143,9 @@ def fetch_public(dest_dir: str = PUBLIC_DIR) -> tuple[Path, int, int, list[str]]
     on_page = {r[0] for r in rows}
     fresh = {(r[0], r[1]) for r in rows}
     kept_models = set()
-    if f.exists():
-        with open(f, newline="", encoding="utf-8") as fh:
+    base = f if f.exists() else BUNDLED_FILE  # a first update starts from the shipped snapshot
+    if base.exists():
+        with open(base, newline="", encoding="utf-8") as fh:
             for old in csv.DictReader(fh):
                 key = (old.get("model", ""), old.get("metric", ""))
                 if key in fresh or not key[0]:
@@ -180,10 +183,15 @@ def _load(path: str, mtime: float) -> tuple[tuple, ...]:
 
 
 def load(settings: dict) -> tuple[tuple, ...]:
+    """Local values (from 'capacity update') plus the shipped snapshot for whatever the local file doesn't have."""
     f = public_file(settings)
-    if not f.exists():
-        return ()
-    return _load(str(f), f.stat().st_mtime)
+    local = _load(str(f), f.stat().st_mtime) if f.exists() else ()
+    shipped = _load(str(BUNDLED_FILE), BUNDLED_FILE.stat().st_mtime) if BUNDLED_FILE.exists() else ()
+    shipped = tuple(r[:4] + (r[4] + " (snapshot shipped with pan-ngfw-load)",) + r[5:] for r in shipped)
+    if not local:
+        return shipped
+    have = {(r[0], r[1]) for r in local}
+    return local + tuple(r for r in shipped if (r[0], r[1]) not in have)
 
 
 def limits(settings: dict, model: str) -> tuple[dict, dict, str, str]:
@@ -223,8 +231,8 @@ def missing(vals: dict, keys) -> list[str]:
 def hint(model: str, status: str, missing_labels: list[str]) -> str:
     """One sentence for the report about what the public data doesn't cover."""
     if status == "no_data":
-        return ("The public product comparison has not been fetched on this computer (run 'pan-ngfw-load capacity "
-                "update'), so only limits the firewall reports itself are compared.")
+        return ("No public product comparison is available (run 'pan-ngfw-load capacity update'), so only limits "
+                "the firewall reports itself are compared.")
     if status == "no_model":
         return (f"The {model} is not in the public product comparison, so only limits the firewall reports itself "
                 "are compared.")

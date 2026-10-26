@@ -456,6 +456,8 @@ def cmd_capacity(cfg, args) -> int:
             print("  no public value: " + ", ".join(gaps))
         return 0
     models = sorted({r[0] for r in rows})
+    if not CAP.public_file(st).exists():
+        print("Using the snapshot shipped with pan-ngfw-load - run 'pan-ngfw-load capacity update' for current values.")
     gone = sorted({r[0] for r in rows if r[5] != "yes"} - {r[0] for r in rows if r[5] == "yes"})
     print(f"{max(r[4] for r in rows)}: {len(rows)} values for {len(models)} models. "
           "Show one: pan-ngfw-load capacity show <MODEL>")

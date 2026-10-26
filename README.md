@@ -95,14 +95,14 @@ pan-ngfw-load tsf extracted_dir/                    # an already unpacked TSF wo
 pan-ngfw-load -h tsf                                # all options
 ```
 
-**Capacity and model limits (extended):** the firewall reports some limits itself (sessions, ARP/neighbor/MAC and route tables); those are always used. For everything else (throughput, connections per second, rule and object limits, ...) fetch the public product comparison from paloaltonetworks.com once - it covers current and older models and is the only source of datasheet values:
+**Capacity and model limits (extended):** the firewall reports some limits itself (sessions, ARP/neighbor/MAC and route tables); those are always used. Everything else (throughput, connections per second, rule and object limits, ...) comes from the public product comparison on paloaltonetworks.com - it covers current and older models and is the only source of datasheet values:
 
 ```sh
-pan-ngfw-load capacity update            # saves ~/.config/pan-ngfw-load/capacity/public-product-comparison.csv
+pan-ngfw-load capacity update            # current values -> ~/.config/pan-ngfw-load/capacity/public-product-comparison.csv
 pan-ngfw-load capacity show PA-3410      # what the reports will compare against
 ```
 
-Nothing is fetched automatically, and the values are not part of this repository. Updating keeps what the page later drops: models that reach end of sale/life disappear from the public page, but their last published values stay in the local file (marked as no longer listed), so reports for older firewalls keep working. The public comparison states no PAN-OS version. Where it has no value for a model or an item, the report says so and that item is compared only against a limit the firewall reports itself, if there is one.
+A snapshot of these values ships with pan-ngfw-load (`pan_ngfw_load/data/`, refreshed with every release), so reports have them even offline; `install.sh` fetches the current values right after the installation. Updating keeps what the page later drops: models that reach end of sale/life disappear from the public page, but their last published values stay in the local file (marked as no longer listed), so reports for older firewalls keep working. The public comparison states no PAN-OS version. Where it has no value for a model or an item, the report says so and that item is compared only against a limit the firewall reports itself, if there is one.
 
 **Core spikes:** a core *spikes* while its per-minute load is at least **10 points** above the median of the other DP cores for at least **15 minutes**. Comparing with the other cores, not with a fixed level, separates a real imbalance from a busy but evenly loaded firewall. Both values can be changed per run (above) or in the config file (`spike_threshold`, `spike_min_duration`).
 
