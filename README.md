@@ -17,6 +17,8 @@ The file is called like `20250424_1219_techsupport.tgz`. Take it while (or short
 
 ### 2. Install the TSF analyser
 
+**Download:** the current archive `pan-ngfw-load-<version>.tar.gz` is in [`dist/`](https://github.com/dogbyter/pan-ngfw-load/tree/main/dist), and every version is under [Releases](https://github.com/dogbyter/pan-ngfw-load/releases) (with its SHA-256 in the release notes). The [latest release](https://github.com/dogbyter/pan-ngfw-load/releases/latest) is the same file as `dist/`.
+
 ```sh
 tar xzf pan-ngfw-load-<version>.tar.gz && cd pan-ngfw-load-<version>
 ./install.sh --tsf-only
