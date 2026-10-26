@@ -15,6 +15,8 @@ official datasheet in the config file to compare against them:
 import numpy as np
 import pandas as pd
 
+from .. import capacity as CAP
+
 TITLE = "Capacity - how much headroom is left"
 
 CEILING = 80  # % DP load treated as the practical limit (latency and drops rise above)
@@ -43,23 +45,33 @@ def build(ctx):
     if not si and sess.empty:
         return []
     model = ds.meta.get("model", "?")
-    sheet = (ctx.settings.get("capacity") or {}).get(model, {})
+    sw = ds.meta.get("sw_version", "")
+    sheet, _notes, ver = CAP.limits(ctx.settings, model, sw)
     out = [ctx.h1(TITLE), ctx.p(
         f"How close this {model} gets to its limits. Measured peaks are the highest of the 'show session info' "
         "snapshots the dp-monitor logs take every 10 minutes (about the last two days); bursts between two "
         "snapshots are not seen. The session maximum is "
         "reported by the firewall itself."
-        + ("" if sheet else f" No datasheet values are configured for the {model}; add a <i>[capacity {model}]</i> "
-           "block to the config file (firewall_gbps, threat_gbps, ipsec_gbps, cps) to compare against them."))]
+        + ((f" Datasheet values: PAN-OS {ver}" + (f" - this firewall runs {sw}; throughput figures differ between "
+                                                    "versions." if ver and sw and not sw.startswith(
+                                                        ".".join(ver.split(".")[:2])) else "."))
+           if sheet and ver else " Datasheet values from the config file." if sheet else
+           f" No datasheet values are configured for the {model}; set <i>capacity_files</i> or add a "
+           f"<i>[capacity {model}]</i> block in the config file to compare against them (see docs/SETUP.md)."))]
 
     rows = []
     if not sess.empty:
         def peak(col, scale=1.0):
             return float(sess[col].max()) * scale if col in sess.columns and sess[col].notna().any() else np.nan
         gbps = peak("kbps", 1e-6)
-        rows.append(("Throughput", f"{gbps:,.2f} Gbit/s", sheet.get("threat_gbps") or sheet.get("firewall_gbps"),
-                     gbps, "Gbit/s",
-                     "threat prevention" if sheet.get("threat_gbps") else "firewall" if sheet.get("firewall_gbps") else ""))
+        if sheet.get("threat_appmix_gbps"):
+            rows.append(("Throughput", f"{gbps:,.2f} Gbit/s", sheet["threat_appmix_gbps"], gbps, "Gbit/s",
+                         "threat prevention, appmix"))
+        if sheet.get("fw_appmix_gbps"):
+            rows.append(("Throughput", f"{gbps:,.2f} Gbit/s", sheet["fw_appmix_gbps"], gbps, "Gbit/s",
+                         "firewall / App-ID, appmix"))
+        if not (sheet.get("threat_appmix_gbps") or sheet.get("fw_appmix_gbps")):
+            rows.append(("Throughput", f"{gbps:,.2f} Gbit/s", None, gbps, "Gbit/s", ""))
         rows.append(("Packets per second", f"{peak('pps'):,.0f}", None, None, "", ""))
         c = peak("cps")
         rows.append(("New sessions per second", f"{c:,.0f}", sheet.get("cps"), c, "/s", ""))
@@ -72,9 +84,16 @@ def build(ctx):
         use = "-" if not limit or val is None or pd.isna(val) else f"{val / float(limit) * 100:.0f}%"
         tab.append((name, measured, lim + (f" ({src})" if limit and src else ""), use))
     out.append(ctx.h2("Peaks against the limits"))
-    out.append(ctx.table(pd.DataFrame(tab, columns=["metric", "measured peak", "limit", "used"]), [5.0, 3.6, 5.0, 2.0]))
+    out.append(ctx.table(pd.DataFrame(tab, columns=["metric", "measured peak", "limit", "used"]), [4.2, 3.2, 7.0, 2.0]))
     out.append(ctx.small("Datasheet figures are measured under ideal lab conditions with a fixed traffic mix; real "
                          "traffic usually reaches the limit earlier. Treat 'used' as a rough indication."))
+    over = [t for t in tab if t[3].endswith("%") and t[3] != "-" and float(t[3][:-1]) > 100]
+    if over:
+        out.append(ctx.p(
+            "<b>Above 100% of a datasheet value</b> is possible without an overload: the datasheet assumes every "
+            "packet goes through that inspection with its test mix, while real traffic is partly not inspected (IPsec "
+            "pass-through, application overrides, rules without security profiles) or uses larger packets. Whether "
+            "the dataplane is really close to its limit shows in its load - see the headroom below."))
 
     # --- headroom from load vs packet rate ------------------------------------------------
     df = _dp_load_vs_pps(ds)

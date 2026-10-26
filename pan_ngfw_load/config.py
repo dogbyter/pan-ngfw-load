@@ -15,6 +15,7 @@ Location: $PAN_NGFW_LOAD_CONFIG, else ~/.config/pan-ngfw-load/pan-ngfw-load.ini.
     retain_reports = 180d
     spike_threshold = 10              # core spike: points above the median of the other DP cores
     spike_min_duration = 15m          # ... sustained at least this long
+    capacity_files =                  # optional datasheet values: CSV file(s), directory or glob (see capacity.py)
 
     [device fw01]
     host = 192.0.2.10                 # management IP or FQDN
@@ -46,6 +47,7 @@ DEFAULTS = {
     "retain_reports": "180d",
     "spike_threshold": "10",
     "spike_min_duration": "15m",
+    "capacity_files": "",
 }
 
 
@@ -94,6 +96,7 @@ class Config:
     retain_reports: float
     spike_threshold: float = 10.0
     spike_min_duration: float = 900.0
+    capacity_files: list = field(default_factory=list)
     devices: dict[str, Device] = field(default_factory=dict)
     raw: configparser.ConfigParser | None = None
 
@@ -127,6 +130,7 @@ def load(path: Path | None = None) -> Config:
         retain_samples=parse_duration(g.get("retain_samples")), retain_logs=parse_duration(g.get("retain_logs")),
         retain_reports=parse_duration(g.get("retain_reports")),
         spike_threshold=float(g.get("spike_threshold")), spike_min_duration=parse_duration(g.get("spike_min_duration")),
+        capacity_files=[x.strip() for x in g.get("capacity_files", "").split(",") if x.strip()],
         raw=cp,
     )
     for sec in cp.sections():

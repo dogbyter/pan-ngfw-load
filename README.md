@@ -61,6 +61,7 @@ There are two report kinds. The **standard report** is the default; **`-x` / `--
 | IPsec VPN | tunnels and their state, encryption (GCM vs CBC), traffic per tunnel interface, ESP rates over time, IPsec share of DP CPU | extended |
 | Sessions | session table use, TCP/UDP/ICMP mix over time, what the listed sessions are (applications, zone pairs, ports, NAT) | both |
 | Capacity | measured peaks against the model's limits, and how much more traffic the dataplane takes at the current mix before it reaches 80% | extended |
+| Configuration against model limits | rules in effect, objects, zones, routers, interfaces, VLAN tags, ARP/neighbor/MAC/route tables, tunnels, User-ID, sessions - each against its limit; limits the firewall reports itself come first, datasheet values from your capacity files | extended |
 | Management plane | MP CPU over 30 days, CPU split, processes with their meaning and over time, memory, MP network interfaces, load average | both |
 | Health and stability | last boot, crash reports, processes, HA pair, hardware sensors, disk space, lost logs | both |
 | Appendix | method and caveats | both |
@@ -92,15 +93,14 @@ pan-ngfw-load tsf extracted_dir/                    # an already unpacked TSF wo
 pan-ngfw-load -h tsf                                # all options
 ```
 
-**Capacity (extended):** the session maximum comes from the firewall itself. Datasheet figures for throughput and connections per second are not built in - published values differ between sources and PAN-OS versions. To compare against them, put the official values into the config file (see [docs/SETUP.md](docs/SETUP.md#6-configuration-reference)):
+**Capacity and model limits (extended):** the firewall reports some limits itself (sessions, ARP/neighbor/MAC and route tables); those are always used. Datasheet values (throughput, connections per second, rule and object limits, ...) are not built in - published figures differ between sources and PAN-OS versions. To compare against them, keep them in a CSV file of your own and point the config to it (format: [contrib/capacity.example.csv](contrib/capacity.example.csv), details in [docs/SETUP.md](docs/SETUP.md#6-configuration-reference)):
 
 ```ini
-[capacity PA-3410]
-firewall_gbps = 0      # firewall throughput (appmix)
-threat_gbps = 0        # threat prevention throughput
-ipsec_gbps = 0         # IPsec VPN throughput
-cps = 0                # new sessions per second
+[general]
+capacity_files = ~/.config/pan-ngfw-load/capacity/      # file(s), directory or glob; several PAN-OS versions possible
 ```
+
+Single values can also be set in a `[capacity MODEL]` block (`firewall_gbps`, `threat_gbps`, `ipsec_gbps`, `cps`). For each firewall the file with the PAN-OS version closest to its own is used, and the report says when the versions differ.
 
 **Core spikes:** a core *spikes* while its per-minute load is at least **10 points** above the median of the other DP cores for at least **15 minutes**. Comparing with the other cores, not with a fixed level, separates a real imbalance from a busy but evenly loaded firewall. Both values can be changed per run (above) or in the config file (`spike_threshold`, `spike_min_duration`).
 

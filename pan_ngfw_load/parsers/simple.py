@@ -388,3 +388,69 @@ def lacp(text: str) -> pd.DataFrame:
                 if r["ae"] == ae:
                     r["rate"] = m.group(1)
     return pd.DataFrame(rows, columns=["ae", "interface", "bundled", "rx_state", "mux_state", "selection", "mode", "rate"])
+
+
+def config_file(root: Path) -> Path | None:
+    """The configuration to count from: the merged one (local + pushed by Panorama) when the TSF has it."""
+    for rel in ("opt/pancfg/mgmt/tmp/panorama_pushed/mergesp.xml", "opt/pancfg/mgmt/saved-configs/running-config.xml"):
+        f = root / rel
+        if f.exists() and f.stat().st_size > 200:
+            return f
+    return None
+
+
+def config_scale(config_xml: Path) -> dict[str, int]:
+    """Counts of configured objects and rules (shared + every vsys)."""
+    try:
+        root = ET.parse(config_xml).getroot()
+    except (OSError, ET.ParseError):
+        return {}
+    scopes = root.findall("shared") + root.findall("devices/entry/vsys/entry")
+    n = lambda path: sum(len(s.findall(path)) for s in scopes)
+    rb = lambda kind: sum(len(s.findall(f"rulebase/{kind}/rules/entry")) + len(s.findall(f"pre-rulebase/{kind}/rules/entry"))
+                          + len(s.findall(f"post-rulebase/{kind}/rules/entry")) for s in scopes)
+    net = root.findall("devices/entry/network")
+    are = (root.findtext(".//deviceconfig/setting/advance-routing") or "").strip() == "yes"
+    return {
+        "address_objects": n("address/entry"), "address_groups": n("address-group/entry"),
+        "service_objects": n("service/entry"), "service_groups": n("service-group/entry"),
+        "edl_lists": n("external-list/entry"), "url_custom_categories": n("profiles/custom-url-category/entry"),
+        "zones": n("zone/entry"),
+        # only the routers of the active routing engine count (the config can hold both kinds)
+        "virtual_routers": sum(len(x.findall("logical-router/entry" if are else "virtual-router/entry")) for x in net),
+        "security_rules": rb("security"), "nat_rules": rb("nat"), "decryption_rules": rb("decryption"),
+        "pbf_rules": rb("pbf"), "app_override_rules": rb("application-override"), "dos_rules": rb("dos"),
+        "qos_rules": rb("qos"),
+        "panorama_managed": int(root.find(".//deviceconfig/system/panorama") is not None or _pushed(config_xml)),
+    }
+
+
+def _pushed(config_xml: Path) -> bool:
+    """True when the TSF holds configuration actually pushed by Panorama (lastsp.xml is a stub otherwise)."""
+    last = config_xml.parent / "lastsp.xml"
+    return config_xml.name == "mergesp.xml" and last.exists() and last.stat().st_size > 200
+
+
+def running_rules(text: str) -> int:
+    """'show running security-policy' / nat-policy / ... -> number of rules in effect."""
+    return len(re.findall(r'; index: \d+" \{', text))
+
+
+def table_usage(text: str, kind: str) -> tuple[int | None, int | None]:
+    """'show arp all' / 'show neighbor interface all' / 'show mac all' -> (entries in table, maximum supported)."""
+    mx = re.search(r"maximum of entries supported\s*:\s*(\d+)", text)
+    tot = re.search(rf"total {kind} entries in table\s*:\s*(\d+)", text)
+    return (int(tot.group(1)) if tot else None), (int(mx.group(1)) if mx else None)
+
+
+def fib_usage(text: str) -> tuple[int | None, int | None]:
+    """'show routing fib' / 'show advanced-routing fib' -> (fib entries of the device, maximum for the device)."""
+    mx = re.search(r"maximum of fib entries for device:\s*(\d+)", text)
+    used = re.search(r"number of fib entries for device:\s*(\d+)", text)
+    return (int(used.group(1)) if used else None), (int(mx.group(1)) if mx else None)
+
+
+def total_count(text: str) -> int | None:
+    """'Total: 12 users' / 'Total: 0 registered addresses' / 'Total Current Users: 3' -> the number."""
+    m = re.search(r"Total(?: Current Users)?:\s*(\d+)", text or "")
+    return int(m.group(1)) if m else None

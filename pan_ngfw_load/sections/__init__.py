@@ -8,7 +8,7 @@ To add a focus area: create sNN_<name>.py and add it to SECTIONS (and optionally
 """
 
 from . import (s10_coverage, s20_dp_load, s22_dp_resources, s25_core_spikes, s28_drops, s30_dp_breakdown,
-               s40_traffic, s42_interfaces, s45_sessions, s46_vpn, s48_capacity, s50_mp, s55_health, s60_logs,
+               s40_traffic, s42_interfaces, s45_sessions, s46_vpn, s48_capacity, s49_scale, s50_mp, s55_health, s60_logs,
                s90_method)
 
 SECTIONS = {
@@ -23,6 +23,7 @@ SECTIONS = {
     "vpn": s46_vpn,
     "sessions": s45_sessions,
     "capacity": s48_capacity,
+    "scale": s49_scale,
     "mp": s50_mp,
     "health": s55_health,
     "logs": s60_logs,
@@ -31,9 +32,9 @@ SECTIONS = {
 
 STANDARD = ["coverage", "dp_load", "core_spikes", "dp_resources", "dp_breakdown", "traffic", "sessions", "mp",
             "health", "logs", "method"]
-EXTENDED_ONLY = {"drops", "interfaces", "vpn", "capacity"}  # added by --extended
+EXTENDED_ONLY = {"drops", "interfaces", "vpn", "capacity", "scale"}  # added by --extended
 EXTENDED = ["coverage", "dp_load", "core_spikes", "dp_resources", "drops", "dp_breakdown", "traffic", "interfaces",
-            "vpn", "sessions", "capacity", "mp", "health", "logs", "method"]
+            "vpn", "sessions", "capacity", "scale", "mp", "health", "logs", "method"]
 
 # Named section sets, selectable with --profile (--extended = profile 'extended')
 PROFILES = {

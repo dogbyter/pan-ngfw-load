@@ -237,7 +237,8 @@ def _settings(cfg, args) -> dict:
                 cap[m.group(1)] = {k: float(v) for k, v in cfg.raw[sec].items()
                                    if k in ("firewall_gbps", "threat_gbps", "ipsec_gbps", "cps") and v.strip()}
     return {"spike_threshold": th, "spike_min_minutes": max(1, round(dur / 60)), "capacity": cap,
-            "subinterfaces": bool(getattr(args, "subinterfaces", False))}
+            "subinterfaces": bool(getattr(args, "subinterfaces", False)),
+            "capacity_files": cfg.capacity_files}
 
 
 def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: str, anon=None,

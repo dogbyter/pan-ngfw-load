@@ -164,6 +164,7 @@ Re-run it at any time: `pan-ngfw-load init --device <name>` keeps existing value
 | `retain_samples` / `retain_logs` / `retain_reports` | `35d` / `90d` / `180d` | deleted by `pan-ngfw-load prune` (TSF reports are kept) |
 | `spike_threshold` | `10` | a core *spikes* while its load is this many points above the median of the other DP cores; per run: `--spike-threshold` |
 | `spike_min_duration` | `15m` | ... for at least this long (dips under 5 min are bridged); per run: `--spike-min-duration` |
+| `capacity_files` | – | optional datasheet values for the extended report (capacity, configuration against model limits): CSV file(s), a directory or a glob, comma-separated. Format: `contrib/capacity.example.csv` (model, metric, value, unit, panos_version, text); one file per PAN-OS version, the closest one is used. Keep these files outside the pan-ngfw-load folder if they are not yours to share |
 | `[capacity MODEL]` `firewall_gbps`, `threat_gbps`, `ipsec_gbps`, `cps` | – | optional datasheet values for the capacity section of the extended report (`-x`), e.g. `[capacity PA-3410]`; take them from the official datasheet |
 | `[device NAME] host` | – | management IP/FQDN |
 | `[device NAME] key` | NAME | key file name in `secrets_dir` |

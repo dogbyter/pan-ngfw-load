@@ -165,24 +165,25 @@ def _from_cli(ds: Dataset) -> None:
             ds.t[key] = fn(txt)
     if ds.bundle.crashinfo:
         ds.t["crashes"] = simple.crashinfo(ds.bundle.crashinfo)
+    _scale(ds, d)
     if (txt := d.get("debug dataplane pow status", -1)):  # repeated in a TSF; the last one is the newest
         ds.t["pow_status"] = simple.pow_status(txt)
     if (txt := d.get("show counter interface all")):
         ifc = simple.interface_counters(txt)
-        cfg_xml = ds.bundle.root / "opt/pancfg/mgmt/saved-configs/running-config.xml"
-        if cfg_xml.exists():
+        cfg_xml = simple.config_file(ds.bundle.root)
+        if cfg_xml is not None:
             ifc = ifc.merge(simple.ipsec_tunnels(cfg_xml), on="interface", how="left")
         ds.t["if_counters"] = ifc
     if (txt := d.get("show interface all")):
         lg = simple.interface_logical(txt)
-        cfg_xml = ds.bundle.root / "opt/pancfg/mgmt/saved-configs/running-config.xml"
-        zones = simple.interface_zones(cfg_xml) if cfg_xml.exists() else {}
+        cfg_xml = simple.config_file(ds.bundle.root)
+        zones = simple.interface_zones(cfg_xml) if cfg_xml is not None else {}
         if zones:
             lg["zone"] = lg.interface.map(zones).fillna(lg.zone)
         ds.t["if_logical"] = lg
     members = {}
-    cfg_xml = ds.bundle.root / "opt/pancfg/mgmt/saved-configs/running-config.xml"
-    if cfg_xml.exists():
+    cfg_xml = simple.config_file(ds.bundle.root)
+    if cfg_xml is not None:
         members = simple.ae_members(cfg_xml)
     lc = simple.lacp(d.get("show lacp aggregate-ethernet all") or "")
     for r in lc.itertuples():  # LACP output also knows members a template-pushed config may not show
@@ -190,6 +191,46 @@ def _from_cli(ds: Dataset) -> None:
     if members:
         ae = pd.DataFrame(sorted(members.items(), key=lambda kv: (kv[1], kv[0])), columns=["interface", "ae"])
         ds.t["ae_members"] = ae.merge(lc.drop(columns=["ae"]), on="interface", how="left")
+
+
+def _scale(ds: Dataset, d) -> None:
+    """Configuration and table sizes in use, with the limits the firewall reports itself (scale_used)."""
+    rows = []  # metric, used, device limit, source
+    cfg_xml = simple.config_file(ds.bundle.root)
+    cfg = simple.config_scale(cfg_xml) if cfg_xml is not None else {}
+    ds.meta["config_source"] = ("" if cfg_xml is None else "configuration incl. what Panorama pushed"
+                                if cfg.get("panorama_managed") else "configuration")
+    for metric, cmd in (("security_rules", "show running security-policy"), ("nat_rules", "show running nat-policy"),
+                        ("decryption_rules", "show running decryption-policy"), ("pbf_rules", "show running pbf-policy")):
+        txt = d.get(cmd)
+        if txt is not None:
+            rows.append((metric, simple.running_rules(txt), None, "rules in effect"))
+        elif metric in cfg:
+            rows.append((metric, cfg[metric], None, "configuration"))
+    for metric in ("app_override_rules", "dos_rules", "qos_rules", "address_objects", "address_groups",
+                   "service_objects", "service_groups", "edl_lists", "url_custom_categories", "zones", "virtual_routers"):
+        if metric in cfg:
+            rows.append((metric, cfg[metric], None, "configuration"))
+    for metric, cmd, kind in (("arp_entries", "show arp all", "ARP"), ("ndp_entries", "show neighbor interface all", "neighbor"),
+                              ("mac_entries", "show mac all", "MAC")):
+        if (txt := d.get(cmd)):
+            used, mx = simple.table_usage(txt, kind)
+            if used is not None:
+                rows.append((metric, used, mx, "table"))
+    for cmd in ("show routing fib", "show advanced-routing fib"):
+        if (txt := d.get(cmd)):
+            used, mx = simple.fib_usage(txt)
+            if used is not None:
+                rows.append(("fib_total", used, mx, "table"))
+                break
+    for metric, cmd in (("userid_mappings_mp", "show user ip-user-mapping-mp all option count"),
+                        ("dag_ips", "show object registered-ip all option count"),
+                        ("gp_users", "show global-protect-gateway statistics")):
+        n = simple.total_count(d.get(cmd) or "")
+        if n is not None:
+            rows.append((metric, n, None, "runtime"))
+    ds.t["scale_used"] = pd.DataFrame(rows, columns=["metric", "used", "device_limit", "source"]).drop_duplicates("metric")
+    ds.meta["panorama_managed"] = bool(cfg.get("panorama_managed"))
 
 
 def _enrich_pow(df: pd.DataFrame) -> pd.DataFrame:

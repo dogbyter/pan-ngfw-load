@@ -21,7 +21,9 @@ key = fw01                          # <secrets_dir>/fw01.key, fw01.fingerprint
 diag_key = fw01                     # key allowed to run 'debug dataplane pow performance' (layout A: same key)
 # sample_interval = 2m              # per-device override
 
-# Optional: datasheet values for the capacity section of the extended report (pan-ngfw-load tsf -x / report -x).
+# Optional: datasheet values for the extended report (capacity, configuration against model limits).
+# capacity_files = ~/.config/pan-ngfw-load/capacity/   (in [general]; format: contrib/capacity.example.csv)
+# Single values can also be set per model:
 # Not built in - take them from the official datasheet of your model and PAN-OS version.
 # [capacity PA-3410]
 # firewall_gbps = 0                 # firewall throughput (App-ID, appmix)
