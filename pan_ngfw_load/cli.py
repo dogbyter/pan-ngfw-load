@@ -442,6 +442,9 @@ def main(argv=None) -> int:
                     help="anonymized report - same as -a after 'tsf' or 'report'")
     ap.add_argument("-x", "--extended", dest="pre_extended", action="store_true",
                     help="extended report - same as -x after 'tsf' or 'report'")
+    ap.add_argument("--subinterfaces", dest="pre_subinterfaces", action="store_true",
+                    help="detailed statistics of every sub-interface and VLAN interface - same as --subinterfaces "
+                         "after 'tsf' or 'report'")
     ap.add_argument("-V", "--version", action="version",
                     version=f"pan-ngfw-load {__version__}" + ("" if live else " (TSF-only)"))
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="command", title="commands")
@@ -516,6 +519,10 @@ def main(argv=None) -> int:
         if not hasattr(args, "extended"):
             ap.error(f"-x/--extended only applies to {'tsf and report' if live else 'tsf'}, not to '{args.cmd}'")
         args.extended = True
+    if args.pre_subinterfaces:
+        if not hasattr(args, "subinterfaces"):
+            ap.error(f"--subinterfaces only applies to {'tsf and report' if live else 'tsf'}, not to '{args.cmd}'")
+        args.subinterfaces = True
     if getattr(args, "extended", False) and args.profile == "standard":
         args.profile = "extended"
 
