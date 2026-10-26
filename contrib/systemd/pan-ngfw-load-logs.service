@@ -1,0 +1,8 @@
+[Unit]
+Description=Incremental pan-ngfw-load log export
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PAN_NGFW_LOAD_CONFIG=%h/.config/pan-ngfw-load/pan-ngfw-load.ini
+ExecStart=%h/.local/bin/pan-ngfw-load logs

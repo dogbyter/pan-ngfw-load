@@ -1,0 +1,9 @@
+# pan-ngfw-load crontab block - 'pan-ngfw-load cron' prints this with the real paths, 'pan-ngfw-load cron --install' installs it.
+# The sample interval is NOT set here: 'tick' runs every minute and samples each device only when
+# its configured interval (sample_interval, default 5m) has elapsed.
+# >>> pan-ngfw-load >>>
+* * * * *   PAN_NGFW_LOAD_CONFIG=/home/USER/.config/pan-ngfw-load/pan-ngfw-load.ini /home/USER/.local/bin/pan-ngfw-load tick   >/dev/null 2>&1
+7 * * * *   PAN_NGFW_LOAD_CONFIG=/home/USER/.config/pan-ngfw-load/pan-ngfw-load.ini /home/USER/.local/bin/pan-ngfw-load logs   >/dev/null 2>&1
+15 6 * * *  PAN_NGFW_LOAD_CONFIG=/home/USER/.config/pan-ngfw-load/pan-ngfw-load.ini /home/USER/.local/bin/pan-ngfw-load report >/dev/null 2>&1 && PAN_NGFW_LOAD_CONFIG=/home/USER/.config/pan-ngfw-load/pan-ngfw-load.ini /home/USER/.local/bin/pan-ngfw-load prune >/dev/null 2>&1
+# <<< pan-ngfw-load <<<
+# All output is written to <data_dir>/pan-ngfw-load.log (rotated, 3 x 5 MB).

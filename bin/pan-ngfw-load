@@ -1,0 +1,15 @@
+#!/bin/sh
+# pan-ngfw-load launcher - runs the package with the venv that install.sh created next to it.
+# Python runs isolated (-I): the current directory and PYTHON* variables are ignored, so the
+# installed code is used even when called from inside an extracted source tree.
+SELF="$(readlink -f "$0")"
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+PY="$ROOT/.venv/bin/python"
+[ -x "$PY" ] || { echo "pan-ngfw-load: no virtualenv at $ROOT/.venv - run install.sh" >&2; exit 1; }
+PAN_NGFW_LOAD_LAUNCHER="$SELF" exec "$PY" -I -c '
+import sys
+sys.path.insert(0, sys.argv.pop(1))
+sys.argv[0] = "pan-ngfw-load"
+from pan_ngfw_load.cli import main
+sys.exit(main())
+' "$ROOT" "$@"

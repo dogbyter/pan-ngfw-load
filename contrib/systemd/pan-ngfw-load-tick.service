@@ -1,0 +1,8 @@
+[Unit]
+Description=Take pan-ngfw-load samples for devices that are due
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PAN_NGFW_LOAD_CONFIG=%h/.config/pan-ngfw-load/pan-ngfw-load.ini
+ExecStart=%h/.local/bin/pan-ngfw-load tick

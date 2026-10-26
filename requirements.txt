@@ -1,0 +1,4 @@
+# pan-ngfw-load runtime dependencies (installed into the private venv by install.sh)
+pandas>=2.0
+matplotlib>=3.7
+reportlab>=4.0

@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily pan-ngfw-load report and retention
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PAN_NGFW_LOAD_CONFIG=%h/.config/pan-ngfw-load/pan-ngfw-load.ini
+ExecStart=%h/.local/bin/pan-ngfw-load report
+ExecStartPost=%h/.local/bin/pan-ngfw-load prune

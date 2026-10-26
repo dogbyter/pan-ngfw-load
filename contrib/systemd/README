@@ -1,0 +1,9 @@
+Alternative to cron: systemd *user* timers (paths assume the per-user install).
+
+  mkdir -p ~/.config/systemd/user
+  cp pan-ngfw-load-*.service pan-ngfw-load-*.timer ~/.config/systemd/user/
+  systemctl --user daemon-reload
+  systemctl --user enable --now pan-ngfw-load-tick.timer pan-ngfw-load-logs.timer pan-ngfw-load-report.timer
+  loginctl enable-linger "$USER"     # keep timers running without an open login session
+
+Check: systemctl --user list-timers 'pan-ngfw-load-*'

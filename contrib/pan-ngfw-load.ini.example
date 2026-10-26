@@ -1,0 +1,22 @@
+# pan-ngfw-load configuration  ($PAN_NGFW_LOAD_CONFIG or ~/.config/pan-ngfw-load/pan-ngfw-load.ini) - normally written by 'pan-ngfw-load init'
+# Durations: 300 / 300s / 5m / 24h / 7d
+
+[general]
+data_dir = ~/pan-ngfw-load/data              # samples, exported logs, extracted TSFs, state, pan-ngfw-load.log
+report_dir = ~/pan-ngfw-load/reports         # reports: <report_dir>/<device>/<timestamp>/ + 'latest' link
+secrets_dir = ~/.config/pan-ngfw-load/keys   # API keys + pinned TLS fingerprints (700 / 600)
+sample_interval = 5m                # default for all devices, minimum 60s
+report_days = 7                     # window of the scheduled report ('pan-ngfw-load report --days N' to override)
+log_types = traffic                 # traffic, threat
+log_initial = 1d                    # first incremental log export looks back this far
+retain_samples = 35d
+retain_logs = 90d
+retain_reports = 180d
+spike_threshold = 10                # core spike: load points above the median of the other DP cores
+spike_min_duration = 15m            # ... lasting at least this long (report section 'Core spikes')
+
+[device fw01]
+host = 192.0.2.10                   # management IP or FQDN of the firewall
+key = fw01                          # <secrets_dir>/fw01.key, fw01.fingerprint
+diag_key = fw01                     # key allowed to run 'debug dataplane pow performance' (layout A: same key)
+# sample_interval = 2m              # per-device override

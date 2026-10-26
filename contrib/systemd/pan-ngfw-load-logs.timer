@@ -1,0 +1,9 @@
+[Unit]
+Description=Incremental pan-ngfw-load log export (timer)
+
+[Timer]
+OnCalendar=*-*-* *:07:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
