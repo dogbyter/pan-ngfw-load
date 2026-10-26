@@ -2,4 +2,3 @@ data/
 reports/
 .venv/
 __pycache__/
-dist/
