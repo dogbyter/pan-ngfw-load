@@ -4,7 +4,7 @@ Replaced everywhere (meta data, every table cell, findings, output path and file
   hostname            -> alias (default 'firewall')
   serial number       -> 'SERIAL-REDACTED'
   management IP       -> 'MGMT-IP'
-  interface IPs       -> 'DEVICE-IP-1', 'DEVICE-IP-2', ... (from 'show interface all' in a TSF)
+  interface IPs       -> 'DEVICE-IP-1', 'DEVICE-IP-2', ... (IPv4 and IPv6, from 'show interface all' in a TSF)
   TSF file name       -> 'YYYYMMDD_HHMM_techsupport' unless it already has exactly that form
   IPsec tunnel names and VPN peer addresses (tunnel table) -> removed; only tunnel.N remains
 
@@ -39,7 +39,8 @@ class Anonymizer:
             ips[ip] = f"DEVICE-IP-{i + 1}"
         self.ips = ips
         # longest first so 192.0.2.10 is not hit by a 192.0.2.1 rule (also guarded by the lookarounds)
-        self._ip_res = [(re.compile(rf"(?<![\d.]){re.escape(ip)}(?![\d])"), lab)
+        self._ip_res = [(re.compile(rf"(?<![0-9A-Fa-f:]){re.escape(ip)}(?![0-9A-Fa-f:])", re.I) if ":" in ip else
+                         re.compile(rf"(?<![\d.]){re.escape(ip)}(?![\d])"), lab)
                         for ip, lab in sorted(ips.items(), key=lambda kv: -len(kv[0]))]
         variants = {self.host, self.host.replace("-", ""), self.host.replace("-", "_")} - {""}
         self._host_res = [re.compile(rf"(?<![\w-]){re.escape(v)}(?![\w-])", re.I) for v in sorted(variants, key=len, reverse=True)]
@@ -124,10 +125,16 @@ def _is_ip(s: str) -> bool:
     return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", s or "")) or (":" in (s or "") and len(s) > 2)
 
 
+IPV6_RE = re.compile(r"(?<![0-9A-Fa-f:])([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})/\d{1,3}\b")
+
+
 def interface_ips(text: str) -> list[str]:
-    """IPs from the 'logical interfaces' table of 'show interface all' (address column, prefix removed)."""
+    """IPv4 and IPv6 addresses from the 'logical interfaces' table of 'show interface all' (prefix removed)."""
     out = []
     for line in text.splitlines():
         for m in re.finditer(r"(\d{1,3}(?:\.\d{1,3}){3})/\d{1,2}\b", line):
             out.append(m.group(1))
+        for m in IPV6_RE.finditer(line):
+            if m.group(1).count(":") >= 2:
+                out.append(m.group(1))
     return list(dict.fromkeys(out))

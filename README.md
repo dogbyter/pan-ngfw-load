@@ -51,13 +51,13 @@ There are two report kinds. The **standard report** is the default; **`-x` / `--
 |---|---|---|
 | Summary of findings | the key results on one page (info / notice / warning) | both |
 | Data coverage | which data the TSF holds and how far back each source reaches | both |
-| Dataplane CPU load | load per DP core: per week, per day, per hour (24 h) and per minute (~2 days), daily profile. More than 8 cores: the colours repeat with dashed/dotted lines and hatched bars; the extended report draws heatmaps instead (one row per core) | both |
+| Dataplane CPU load | load per DP core: per week, per day, per hour (24 h) and per minute (~2 days), daily profile. More than 8 cores: the colours repeat with dashed/dotted lines and hatched bars; the extended report shows the field of all cores instead (median and lowest-highest range) and names only the cores that stand out | both |
 | Core spikes | *only when a core spikes*: which cores run above the others, when, and what changes meanwhile (traffic profile, counters, IPsec, per-core work, busiest tunnels) | both |
 | Dataplane resources | packet buffers, packet descriptors, software tag descriptors, session table: what each one is, how full it got (minute to 13 weeks), whether one ran out | both |
 | Drops and errors | all drop/error counters since boot, grouped by meaning (policy, network/config, TCP quality, inspection skipped, cloud lookups, resources), largest ones over time | extended |
 | What consumes dataplane CPU | DP CPU time by processing stage, work group, feature and function - since boot and over time | both |
 | Traffic that drives the load | packets, new sessions and sessions over time, how closely the load follows them, top applications since boot | both |
-| Interfaces | traffic per port since boot, average use of the link speed, receive errors per million packets | extended |
+| Interfaces | traffic per port since boot, average use of the link speed, receive errors per million packets; aggregate groups (ae) with their member ports, LACP state and how evenly the traffic is spread. With `--subinterfaces`: every sub-interface and VLAN interface with zone, VLAN, router, addresses, traffic and drops (this also adds the section to the standard report) | extended |
 | IPsec VPN | tunnels and their state, encryption (GCM vs CBC), traffic per tunnel interface, ESP rates over time, IPsec share of DP CPU | extended |
 | Sessions | session table use, TCP/UDP/ICMP mix over time, what the listed sessions are (applications, zone pairs, ports, NAT) | both |
 | Capacity | measured peaks against the model's limits, and how much more traffic the dataplane takes at the current mix before it reaches 80% | extended |
@@ -82,6 +82,7 @@ So the **longest DP history** is the weekly resource-monitor data (up to 13 week
 
 ```sh
 pan-ngfw-load tsf -x file.tgz                       # extended report
+pan-ngfw-load tsf --subinterfaces file.tgz          # + every sub-interface/VLAN interface in detail
 pan-ngfw-load tsf -a file.tgz                       # anonymized (see below)
 pan-ngfw-load tsf file.tgz -o /tmp/reports          # other output directory
 pan-ngfw-load tsf file.tgz -p dp                    # DP-only profile (no MP section)
@@ -114,6 +115,7 @@ cps = 0                # new sessions per second
 | management IP | `MGMT-IP` |
 | the firewall's own interface IPs | `DEVICE-IP-1`, `DEVICE-IP-2`, … |
 | TSF file name, unless it's already in the standard form `YYYYMMDD_HHMM_techsupport` | `YYYYMMDD_HHMM_techsupport`: date from the name if it contains one, else the TSF's own time |
+| the firewall's own IPv6 addresses (from the TSF) | `DEVICE-IP-n`, like IPv4 |
 | IPsec tunnel names and VPN peer addresses (core-spike section) | removed - only `tunnel.N` is shown |
 
 **Not** replaced: the model (needed to judge the load), other IP addresses (clients, servers), zone, rule and application names. The TSF itself stays untouched. Reports go to `<report_dir>/<alias>/tsf_<date>_techsupport_anon/`.

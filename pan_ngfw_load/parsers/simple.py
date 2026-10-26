@@ -140,7 +140,10 @@ def pow_status(text: str) -> pd.DataFrame:
 
 IF_COUNTERS = {"bytes received": "rx_bytes", "bytes transmitted": "tx_bytes",
                "packets received": "rx_pkts", "packets transmitted": "tx_pkts",
-               "receive errors": "rx_errors", "receive discarded": "rx_discards", "packets dropped": "drops"}
+               "receive errors": "rx_errors", "receive discarded": "rx_discards", "packets dropped": "drops",
+               "packets dropped by flow state check": "flow_state_drops", "forwarding errors": "fwd_errors",
+               "no route": "no_route", "arp not found": "arp_not_found", "neighbor not found": "neighbor_not_found",
+               "mac not found": "mac_not_found"}
 
 
 def interface_counters(text: str) -> pd.DataFrame:
@@ -151,8 +154,7 @@ def interface_counters(text: str) -> pd.DataFrame:
         if (m := re.match(r"^Interface: (\S+)", line)):
             cur = rows.setdefault(m.group(1), {"interface": m.group(1)})
             continue
-        m = re.match(r"^(bytes received|bytes transmitted|packets received|packets transmitted|receive errors|"
-                     r"receive discarded|packets dropped)\s+(\d+)\s*$", line)
+        m = re.match(r"^(" + "|".join(re.escape(k) for k in IF_COUNTERS) + r")\s+(\d+)\s*$", line)
         if m and cur is not None and IF_COUNTERS[m.group(1)] not in cur:
             cur[IF_COUNTERS[m.group(1)]] = int(m.group(2))
     return pd.DataFrame(list(rows.values()), columns=["interface", *IF_COUNTERS.values()])
@@ -303,3 +305,86 @@ def ipsec_sa(text: str) -> pd.DataFrame:
         if m:
             rows.append(dict(tunnel_id=int(m.group(1)), algorithm=m.group(2)))
     return pd.DataFrame(rows, columns=["tunnel_id", "algorithm"]).drop_duplicates("tunnel_id")
+
+
+def interface_logical(text: str) -> pd.DataFrame:
+    """'show interface all' logical table -> interface, zone, router, tag, addresses. Read by column position
+    (router names contain spaces); continuation lines add more addresses. Zone names are cut at 16 characters
+    by PAN-OS - see interface_zones() for the full names."""
+    rows, cols, cur = [], None, None
+    for line in text.splitlines():
+        if line.startswith("name") and " forwarding " in line and " tag " in line:
+            hdr = line
+            cols = {k: hdr.index(k) for k in ("id", "vsys", "zone", "forwarding", "tag", "address")}
+            continue
+        if cols is None or line.startswith("---") or not line.strip():
+            continue
+        if line.startswith("total configured") or line.startswith("name "):
+            cols = None
+            continue
+        if line[0] != " ":
+            name = line[:cols["id"]].strip()
+            cut = lambda a, b: line[cols[a]:cols[b] if b else None].strip()
+            cur = dict(interface=name, zone=cut("zone", "forwarding"), router=cut("forwarding", "tag"),
+                       tag=cut("tag", "address"), address=cut("address", None))
+            rows.append(cur)
+        elif cur is not None and line.strip():
+            cur["address"] = (cur["address"] + ", " + line.strip()).strip(", ")
+    df = pd.DataFrame(rows, columns=["interface", "zone", "router", "tag", "address"])
+    df["router"] = df.router.str.replace(r"^vr:", "", regex=True)
+    df["address"] = df.address.replace({"N/A": ""})
+    return df.drop_duplicates("interface")
+
+
+def interface_zones(config_xml: Path) -> dict[str, str]:
+    """Saved running config -> {interface: zone} with the full zone names."""
+    try:
+        root = ET.parse(config_xml).getroot()
+    except (OSError, ET.ParseError):
+        return {}
+    out = {}
+    for zones in root.iter("zone"):
+        for z in zones.findall("entry"):
+            for m in z.iterfind("network/*/member"):
+                if m.text:
+                    out[m.text] = z.get("name")
+    return out
+
+
+def ae_members(config_xml: Path) -> dict[str, str]:
+    """Saved running config -> {physical port: aggregate group}."""
+    try:
+        root = ET.parse(config_xml).getroot()
+    except (OSError, ET.ParseError):
+        return {}
+    return {e.get("name"): e.findtext("aggregate-group") for e in root.iter("entry")
+            if e.get("name", "").startswith("ethernet") and e.findtext("aggregate-group")}
+
+
+def lacp(text: str) -> pd.DataFrame:
+    """'show lacp aggregate-ethernet all' -> per member: ae, interface, bundled, rx/mux/selection state, mode, rate."""
+    rows, ae, in_members, mode, rate = [], None, False, "", ""
+    for line in text.splitlines():
+        s = line.strip()
+        if (m := re.match(r"^AE group: (\S+)", s)):
+            ae, in_members, mode, rate = m.group(1), False, "", ""
+            continue
+        if s.startswith("Members:"):
+            in_members = True
+            continue
+        if in_members:
+            m = re.match(r"^(ethernet\S+)\s+(yes|no)\s+(\S+)\s+(\S+)\s+(\S+)", s)
+            if m:
+                rows.append(dict(ae=ae, interface=m.group(1), bundled=m.group(2), rx_state=m.group(3),
+                                 mux_state=m.group(4), selection=m.group(5), mode="", rate=""))
+                continue
+            in_members = False
+        if (m := re.match(r"^Mode:\s+(\S+)", s)) and ae:
+            for r in rows:
+                if r["ae"] == ae:
+                    r["mode"] = m.group(1)
+        if (m := re.match(r"^Rate:\s+(\S+)", s)) and ae:
+            for r in rows:
+                if r["ae"] == ae:
+                    r["rate"] = m.group(1)
+    return pd.DataFrame(rows, columns=["ae", "interface", "bundled", "rx_state", "mux_state", "selection", "mode", "rate"])

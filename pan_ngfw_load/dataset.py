@@ -173,6 +173,23 @@ def _from_cli(ds: Dataset) -> None:
         if cfg_xml.exists():
             ifc = ifc.merge(simple.ipsec_tunnels(cfg_xml), on="interface", how="left")
         ds.t["if_counters"] = ifc
+    if (txt := d.get("show interface all")):
+        lg = simple.interface_logical(txt)
+        cfg_xml = ds.bundle.root / "opt/pancfg/mgmt/saved-configs/running-config.xml"
+        zones = simple.interface_zones(cfg_xml) if cfg_xml.exists() else {}
+        if zones:
+            lg["zone"] = lg.interface.map(zones).fillna(lg.zone)
+        ds.t["if_logical"] = lg
+    members = {}
+    cfg_xml = ds.bundle.root / "opt/pancfg/mgmt/saved-configs/running-config.xml"
+    if cfg_xml.exists():
+        members = simple.ae_members(cfg_xml)
+    lc = simple.lacp(d.get("show lacp aggregate-ethernet all") or "")
+    for r in lc.itertuples():  # LACP output also knows members a template-pushed config may not show
+        members.setdefault(r.interface, r.ae)
+    if members:
+        ae = pd.DataFrame(sorted(members.items(), key=lambda kv: (kv[1], kv[0])), columns=["interface", "ae"])
+        ds.t["ae_members"] = ae.merge(lc.drop(columns=["ae"]), on="interface", how="left")
 
 
 def _enrich_pow(df: pd.DataFrame) -> pd.DataFrame:

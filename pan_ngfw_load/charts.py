@@ -75,36 +75,32 @@ def series_styles(keys: list) -> dict:
     return out
 
 
-SEQ_CMAP = mcolors.LinearSegmentedColormap.from_list("seq", ["#ffffff"] + SEQ)
+# Many series (e.g. 40 DP cores): draw the field instead of every series - the median of all, the range from the
+# lowest to the highest as a band, and only the few series that differ most from the field in colour.
+FIELD_MAX_HIGHLIGHT = 4
+FIELD_MIN_DEV = 2.0  # mean distance from the median (in the chart's unit) a series needs to be highlighted
 
 
-def heat_cat(ax, mat: pd.DataFrame, vmax: float = 100):
-    """Heatmap: rows = mat.index (e.g. cores), columns = categories (weeks, hours). Returns the image."""
-    im = ax.imshow(mat.values.astype(float), aspect="auto", cmap=SEQ_CMAP, vmin=0, vmax=vmax, interpolation="nearest")
-    ax.set_yticks(range(len(mat.index)))
-    ax.set_yticklabels([str(i) for i in mat.index])
-    ax.grid(False)
-    return im
+def notable(wide: pd.DataFrame, n: int = FIELD_MAX_HIGHLIGHT, min_dev: float = FIELD_MIN_DEV) -> list:
+    """Columns of `wide` (index = x, columns = series) furthest from the median of all columns, most notable first."""
+    med = wide.median(axis=1)
+    dev = wide.sub(med, axis=0).abs().mean()
+    dev = dev[dev >= min_dev].sort_values(ascending=False)
+    return list(dev.index[:n])
 
 
-def heat_time(ax, wide: pd.DataFrame, span_days: float, vmax: float = 100):
-    """Heatmap over time: wide.index = timestamps (regular), columns = rows of the map (e.g. cores)."""
-    x0, x1 = mdates.date2num(wide.index.min()), mdates.date2num(wide.index.max())
-    im = ax.imshow(wide.T.values.astype(float), aspect="auto", cmap=SEQ_CMAP, vmin=0, vmax=vmax,
-                   interpolation="nearest", extent=[x0, x1, len(wide.columns) - 0.5, -0.5])
-    ax.set_yticks(range(len(wide.columns)))
-    ax.set_yticklabels([str(c) for c in wide.columns])
-    ax.grid(False)
-    ax.xaxis_date()
-    time_axis(ax, span_days)
-    return im
-
-
-def heat_colorbar(f, im, ax, label: str):
-    cb = f.colorbar(im, ax=ax, fraction=0.025, pad=0.01)
-    cb.set_label(label)
-    cb.outline.set_visible(False)
-    return cb
+def field_plot(ax, wide: pd.DataFrame, highlight: list, cmap: dict, what: str = "core", marker: str | None = None,
+               lw: float = 1.1) -> None:
+    """Median line + min-max band of all columns, plus the given columns in colour (same keys and colours in
+    every chart of a section - pick them once with notable())."""
+    x = wide.index
+    ax.fill_between(x, wide.min(axis=1), wide.max(axis=1), color=OTHER, alpha=0.35, lw=0,
+                    label=f"range of all {wide.shape[1]} {what}s")
+    ax.plot(x, wide.median(axis=1), color=INK2, lw=lw + 0.4, marker=marker, markersize=2.5,
+            label=f"median of all {what}s")
+    for c in highlight:
+        if c in wide.columns:
+            ax.plot(x, wide[c], color=cmap[c], lw=lw, marker=marker, markersize=2.5, label=f"{what} {c}")
 
 
 def fig(w=W, h=3.0):

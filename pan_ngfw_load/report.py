@@ -15,6 +15,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, inch
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table,
                                 TableStyle)
 
@@ -105,7 +106,8 @@ class Ctx:
                     v = v.strftime("%Y-%m-%d %H:%M")
                 row.append(Paragraph(str(v), STY["cell"]))
             data.append(row)
-        t = Table(data, colWidths=[w * cm for w in col_widths] if col_widths else None, repeatRows=1, hAlign="LEFT")
+        widths = _fit_headers([str(c) for c in df.columns], col_widths) if col_widths else None
+        t = Table(data, colWidths=[w * cm for w in widths] if widths else None, repeatRows=1, hAlign="LEFT")
         t.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), HEAD_BG),
             ("LINEBELOW", (0, 0), (-1, -1), 0.4, RULE),
@@ -113,6 +115,31 @@ class Ctx:
             ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ]))
         return t
+
+
+CELL_PAD = 12  # points: reportlab's default left + right cell padding
+
+
+def _fit_headers(headers: list[str], widths: list[float]) -> list[float]:
+    """Widen columns whose header has a word longer than the column (it would be split mid-word) and take the
+    space from the widest columns, so the table keeps its total width."""
+    widths = list(widths[:len(headers)]) + [widths[-1]] * max(0, len(headers) - len(widths))
+    need = [(max(stringWidth(w, "Helvetica-Bold", STY["cell"].fontSize) for w in h.split() or [""]) + CELL_PAD + 4) / cm
+            for h in headers]
+    extra = sum(max(0.0, n - w) for n, w in zip(need, widths))
+    if extra <= 0:
+        return widths
+    out = [max(w, n) for w, n in zip(widths, need)]
+    for _ in range(len(out)):  # take the extra from the columns with the most room above their own need
+        if extra <= 1e-6:
+            break
+        i = max(range(len(out)), key=lambda k: out[k] - need[k])
+        give = min(extra, out[i] - need[i])
+        if give <= 0:
+            break
+        out[i] -= give
+        extra -= give
+    return out
 
 
 def _footer(meta):
@@ -178,6 +205,7 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
                    f"Tech support file {meta.get('bundle', '?')}, taken {_fmt(meta.get('tsf_time'))}; ") +
                   f"last boot {_fmt(meta.get('boot_time'))} (uptime {meta.get('uptime', '?')})", STY["subtitle"]),
         Paragraph(f"Report: <b>{ctx.settings.get('report_kind', 'standard')}</b>"
+                  + (", with sub-interface detail" if ctx.settings.get("subinterfaces") else "")
                   + (" - run with --extended for drops/errors, interfaces, IPsec VPN and capacity"
                      if ctx.settings.get("report_kind") == "standard" else ""), STY["subtitle"]),
         Spacer(1, 14), ctx.h1("Summary of findings"),

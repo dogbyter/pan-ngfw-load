@@ -236,7 +236,8 @@ def _settings(cfg, args) -> dict:
             if m:
                 cap[m.group(1)] = {k: float(v) for k, v in cfg.raw[sec].items()
                                    if k in ("firewall_gbps", "threat_gbps", "ipsec_gbps", "cps") and v.strip()}
-    return {"spike_threshold": th, "spike_min_minutes": max(1, round(dur / 60)), "capacity": cap}
+    return {"spike_threshold": th, "spike_min_minutes": max(1, round(dur / 60)), "capacity": cap,
+            "subinterfaces": bool(getattr(args, "subinterfaces", False))}
 
 
 def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: str, anon=None,
@@ -247,7 +248,9 @@ def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: s
         anon.apply(ds)
     outdir.mkdir(parents=True, exist_ok=True)
     ds.save(outdir)
-    names = sections.split(",") if sections else PROFILES[profile]
+    names = sections.split(",") if sections else list(PROFILES[profile])
+    if (settings or {}).get("subinterfaces") and "interfaces" not in names and not sections:
+        names.insert(names.index("traffic") + 1 if "traffic" in names else len(names) - 1, "interfaces")
     unknown = [n for n in names if n not in SECTIONS]
     if unknown:
         raise SystemExit(f"unknown section(s): {', '.join(unknown)} - known: {', '.join(SECTIONS)}")
@@ -453,6 +456,9 @@ def main(argv=None) -> int:
         p.add_argument("-o", "--out", type=Path, help="output base directory (default: report_dir)")
         p.add_argument("-x", "--extended", action="store_true",
                        help="extended report: adds drops/errors, interfaces, IPsec VPN and capacity")
+        p.add_argument("--subinterfaces", action="store_true",
+                       help="add a detailed table of every sub-interface and VLAN interface (zone, VLAN, traffic, "
+                            "drops) to the Interfaces section - in any report")
         p.add_argument("-p", "--profile", default="standard",
                        help="section profile: standard (default), extended, dp")
         p.add_argument("-s", "--sections", help="comma-separated sections, overrides --profile")
