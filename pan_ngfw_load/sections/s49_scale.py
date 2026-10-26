@@ -1,6 +1,6 @@
 """Extended: configuration and table sizes against the model's limits - rules, objects, zones, routers,
 interfaces, ARP/neighbor/MAC/route tables, tunnels, User-ID. Limits the firewall reports itself come first;
-datasheet values come from the optional capacity files (pan_ngfw_load/capacity.py)."""
+datasheet values come only from the public product comparison (pan_ngfw_load/capacity.py)."""
 
 import pandas as pd
 
@@ -36,7 +36,7 @@ def build(ctx):
     if used.empty:
         return []
     model, sw = ds.meta.get("model", "?"), ds.meta.get("sw_version", "")
-    sheet, notes, ver = CAP.limits(ctx.settings, model, sw)
+    sheet, notes, src, status = CAP.limits(ctx.settings, model)
 
     rows = []
     for metric, (label, _unit) in CAP.METRICS.items():
@@ -71,12 +71,12 @@ def build(ctx):
              + ", and the live tables (ARP, neighbors, MAC, routes). Where the firewall reports its own limit, that "
              "one is used; otherwise the datasheet value.")
     if sheet:
-        intro += f" Datasheet values: PAN-OS {ver}" + (
-            f" - this firewall runs {sw}; limits can differ between versions." if ver and sw and
-            not sw.startswith(".".join(ver.split(".")[:2])) else ".")
-    else:
-        intro += (" No datasheet values are configured, so only the limits the firewall reports itself are shown. "
-                  "Set <i>capacity_files</i> in the config file to compare all items (see docs/SETUP.md).")
+        intro += f" Datasheet values: {src} (no PAN-OS version stated there)."
+    shown = [m for m in CAP.METRICS if m in set(used.metric) and not (m.endswith("_gbps") or m == "cps")]
+    devlim = set(used[used.device_limit.notna()].metric)
+    gap = CAP.hint(model, status, CAP.missing(sheet, [m for m in shown if m not in devlim]))
+    if gap:
+        intro += f" <b>Note:</b> {gap}"
     out = [ctx.h1(TITLE), ctx.p(intro)]
 
     def status(p):

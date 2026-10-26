@@ -229,16 +229,9 @@ def _settings(cfg, args) -> dict:
     """Analysis thresholds: config file, overridden by command-line options."""
     th = args.spike_threshold if args.spike_threshold is not None else cfg.spike_threshold
     dur = C.parse_duration(args.spike_min_duration) if args.spike_min_duration else cfg.spike_min_duration
-    cap = {}  # [capacity <model>] blocks: datasheet values to compare against
-    if cfg.raw is not None:
-        for sec in cfg.raw.sections():
-            m = re.fullmatch(r"capacity\s+(\S+)", sec)
-            if m:
-                cap[m.group(1)] = {k: float(v) for k, v in cfg.raw[sec].items()
-                                   if k in ("firewall_gbps", "threat_gbps", "ipsec_gbps", "cps") and v.strip()}
-    return {"spike_threshold": th, "spike_min_minutes": max(1, round(dur / 60)), "capacity": cap,
+    return {"spike_threshold": th, "spike_min_minutes": max(1, round(dur / 60)),
             "subinterfaces": bool(getattr(args, "subinterfaces", False)),
-            "capacity_files": cfg.capacity_files}
+            "capacity_dir": cfg.capacity_dir}
 
 
 def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: str, anon=None,
@@ -428,6 +421,48 @@ def live_installed() -> bool:
     return importlib.util.find_spec("pan_ngfw_load.collect") is not None
 
 
+def cmd_capacity(cfg, args) -> int:
+    """Fetch the public product comparison, or show which capacity values are available."""
+    from . import capacity as CAP
+    if args.action == "update":
+        print(f"Fetching the public product comparison from paloaltonetworks.com ...")
+        try:
+            f, models, n, kept = CAP.fetch_public(args.dir or cfg.capacity_dir)
+        except (OSError, ValueError, KeyError) as e:
+            raise SystemExit(f"could not fetch the product comparison: {e} (the existing file is unchanged)")
+        print(f"{n} values for {models} models on the page, saved to {f}")
+        if kept:
+            print(f"Kept from earlier retrievals (no longer on the page): {', '.join(kept)}")
+        return 0
+    st = {"capacity_dir": cfg.capacity_dir}
+    rows = CAP.load(st)
+    if not rows:
+        print(f"No public product comparison in {CAP.public_file(st).parent} yet - run 'pan-ngfw-load capacity update'.")
+        return 1
+    if args.model:
+        vals, notes, src, status = CAP.limits(st, args.model)
+        if status != "ok":
+            print(f"{args.model} is not in the public product comparison.")
+            return 1
+        print(f"{args.model}: {src}")
+        for k, (label, unit) in CAP.METRICS.items():
+            if k in vals:
+                v = vals[k]
+                txt = f"{v:,.0f}" if v >= 100 or v == int(v) else f"{v:g}"
+                print(f"  {label:42s} {txt:>14} {unit}{'  (' + notes[k] + ')' if k in notes else ''}")
+        gaps = CAP.missing(vals, CAP.METRICS)
+        if gaps:
+            print("  no public value: " + ", ".join(gaps))
+        return 0
+    models = sorted({r[0] for r in rows})
+    gone = sorted({r[0] for r in rows if r[5] != "yes"} - {r[0] for r in rows if r[5] == "yes"})
+    print(f"{max(r[4] for r in rows)}: {len(rows)} values for {len(models)} models. "
+          "Show one: pan-ngfw-load capacity show <MODEL>")
+    if gone:
+        print(f"No longer on the page, last published values kept: {', '.join(gone)}")
+    return 0
+
+
 def main(argv=None) -> int:
     live = live_installed()
     ap = argparse.ArgumentParser(
@@ -495,6 +530,12 @@ def main(argv=None) -> int:
     if live:
         p = sub.add_parser("prune", help="delete samples/logs/reports older than the retention settings")
         p.add_argument("-n", "--dry-run", action="store_true")
+    p = sub.add_parser("capacity", help="datasheet values: 'update' fetches the public product comparison, "
+                                        "'show [MODEL]' lists what is available")
+    p.add_argument("action", choices=["show", "update"], nargs="?", default="show")
+    p.add_argument("model", nargs="?", help="model for 'show', e.g. PA-3410")
+    p.add_argument("--dir", help="target directory for 'update' (default: capacity_dir, ~/.config/pan-ngfw-load/capacity)")
+    if live:
         p = sub.add_parser("cron", help="print, --install or --remove the crontab block")
         g = p.add_mutually_exclusive_group()
         g.add_argument("--install", action="store_true")
@@ -528,13 +569,13 @@ def main(argv=None) -> int:
         args.profile = "extended"
 
     cfg = C.load(args.config)
-    if args.cmd not in ("init", "status", "cron", "tsf") and not cfg.path.exists():
+    if args.cmd not in ("init", "status", "cron", "tsf", "capacity") and not cfg.path.exists():
         raise SystemExit(f"no configuration at {cfg.path} - run 'pan-ngfw-load init' first")
     setup_logging(cfg, args.verbose)
     os.umask(0o027)
     handler = {"init": cmd_init, "status": cmd_status, "test": cmd_test, "info": cmd_info, "sample": cmd_sample,
                "tick": cmd_tick, "logs": cmd_logs, "report": cmd_report, "tsf": cmd_tsf, "prune": cmd_prune,
-               "cron": cmd_cron}[args.cmd]
+               "cron": cmd_cron, "capacity": cmd_capacity}[args.cmd]
     try:
         return handler(cfg, args) or 0
     except KeyboardInterrupt:

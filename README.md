@@ -93,14 +93,14 @@ pan-ngfw-load tsf extracted_dir/                    # an already unpacked TSF wo
 pan-ngfw-load -h tsf                                # all options
 ```
 
-**Capacity and model limits (extended):** the firewall reports some limits itself (sessions, ARP/neighbor/MAC and route tables); those are always used. Datasheet values (throughput, connections per second, rule and object limits, ...) are not built in - published figures differ between sources and PAN-OS versions. To compare against them, keep them in a CSV file of your own and point the config to it (format: [contrib/capacity.example.csv](contrib/capacity.example.csv), details in [docs/SETUP.md](docs/SETUP.md#6-configuration-reference)):
+**Capacity and model limits (extended):** the firewall reports some limits itself (sessions, ARP/neighbor/MAC and route tables); those are always used. For everything else (throughput, connections per second, rule and object limits, ...) fetch the public product comparison from paloaltonetworks.com once - it covers current and older models and is the only source of datasheet values:
 
-```ini
-[general]
-capacity_files = ~/.config/pan-ngfw-load/capacity/      # file(s), directory or glob; several PAN-OS versions possible
+```sh
+pan-ngfw-load capacity update            # saves ~/.config/pan-ngfw-load/capacity/public-product-comparison.csv
+pan-ngfw-load capacity show PA-3410      # what the reports will compare against
 ```
 
-Single values can also be set in a `[capacity MODEL]` block (`firewall_gbps`, `threat_gbps`, `ipsec_gbps`, `cps`). For each firewall the file with the PAN-OS version closest to its own is used, and the report says when the versions differ.
+Nothing is fetched automatically, and the values are not part of this repository. Updating keeps what the page later drops: models that reach end of sale/life disappear from the public page, but their last published values stay in the local file (marked as no longer listed), so reports for older firewalls keep working. The public comparison states no PAN-OS version. Where it has no value for a model or an item, the report says so and that item is compared only against a limit the firewall reports itself, if there is one.
 
 **Core spikes:** a core *spikes* while its per-minute load is at least **10 points** above the median of the other DP cores for at least **15 minutes**. Comparing with the other cores, not with a fixed level, separates a real imbalance from a busy but evenly loaded firewall. Both values can be changed per run (above) or in the config file (`spike_threshold`, `spike_min_duration`).
 
@@ -187,5 +187,7 @@ pan-ngfw-load prune -n                  # show what retention would delete
 ## License and disclaimer
 
 MIT - see [LICENSE](LICENSE).
+
+All sources used are public - see [docs/SOURCES.md](docs/SOURCES.md) (the same notice and list are in the appendix of every report). pan-ngfw-load contains and uses no non-public data.
 
 pan-ngfw-load is an independent project. It is not affiliated with, endorsed by or supported by Palo Alto Networks. "Palo Alto Networks" and "PAN-OS" are trademarks of Palo Alto Networks, Inc. The meaning of internal counters and dataplane functions is inferred from their names and observed behaviour, not from vendor documentation.

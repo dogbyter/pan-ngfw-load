@@ -14,19 +14,10 @@ retain_logs = 90d
 retain_reports = 180d
 spike_threshold = 10                # core spike: load points above the median of the other DP cores
 spike_min_duration = 15m            # ... lasting at least this long (report section 'Core spikes')
+capacity_dir = ~/.config/pan-ngfw-load/capacity   # public model limits ('pan-ngfw-load capacity update')
 
 [device fw01]
 host = 192.0.2.10                   # management IP or FQDN of the firewall
 key = fw01                          # <secrets_dir>/fw01.key, fw01.fingerprint
 diag_key = fw01                     # key allowed to run 'debug dataplane pow performance' (layout A: same key)
 # sample_interval = 2m              # per-device override
-
-# Optional: datasheet values for the extended report (capacity, configuration against model limits).
-# capacity_files = ~/.config/pan-ngfw-load/capacity/   (in [general]; format: contrib/capacity.example.csv)
-# Single values can also be set per model:
-# Not built in - take them from the official datasheet of your model and PAN-OS version.
-# [capacity PA-3410]
-# firewall_gbps = 0                 # firewall throughput (App-ID, appmix)
-# threat_gbps = 0                   # threat prevention throughput
-# ipsec_gbps = 0                    # IPsec VPN throughput
-# cps = 0                           # new sessions per second

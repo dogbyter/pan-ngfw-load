@@ -1,15 +1,8 @@
 """Extended: capacity - measured peaks against the model's limits, and how much more traffic the dataplane
 could take at the current traffic mix (from how DP load grows with the packet rate).
 
-Session maximum comes from the firewall itself. Datasheet values (throughput, connections per second) are not
-shipped with the tool - published figures differ between sources and PAN-OS versions. Enter the ones from the
-official datasheet in the config file to compare against them:
-
-    [capacity PA-3410]
-    firewall_gbps = ...     # firewall throughput (App-ID, appmix)
-    threat_gbps = ...       # threat prevention throughput
-    ipsec_gbps = ...        # IPsec VPN throughput
-    cps = ...               # new sessions per second
+The session maximum comes from the firewall itself. Datasheet values (throughput, connections per second) come only
+from the public product comparison (pan_ngfw_load/capacity.py); missing ones are named in the report.
 """
 
 import numpy as np
@@ -46,18 +39,15 @@ def build(ctx):
         return []
     model = ds.meta.get("model", "?")
     sw = ds.meta.get("sw_version", "")
-    sheet, _notes, ver = CAP.limits(ctx.settings, model, sw)
+    sheet, _notes, src, status = CAP.limits(ctx.settings, model)
+    gap = CAP.hint(model, status, CAP.missing(sheet, ["threat_appmix_gbps", "fw_appmix_gbps", "cps"]))
     out = [ctx.h1(TITLE), ctx.p(
         f"How close this {model} gets to its limits. Measured peaks are the highest of the 'show session info' "
         "snapshots the dp-monitor logs take every 10 minutes (about the last two days); bursts between two "
         "snapshots are not seen. The session maximum is "
         "reported by the firewall itself."
-        + ((f" Datasheet values: PAN-OS {ver}" + (f" - this firewall runs {sw}; throughput figures differ between "
-                                                    "versions." if ver and sw and not sw.startswith(
-                                                        ".".join(ver.split(".")[:2])) else "."))
-           if sheet and ver else " Datasheet values from the config file." if sheet else
-           f" No datasheet values are configured for the {model}; set <i>capacity_files</i> or add a "
-           f"<i>[capacity {model}]</i> block in the config file to compare against them (see docs/SETUP.md)."))]
+        + (f" Datasheet values: {src} (no PAN-OS version stated there)." if sheet else "")
+        + (f" <b>Note:</b> {gap}" if gap else ""))]
 
     rows = []
     if not sess.empty:
