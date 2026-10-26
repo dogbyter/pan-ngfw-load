@@ -229,7 +229,14 @@ def _settings(cfg, args) -> dict:
     """Analysis thresholds: config file, overridden by command-line options."""
     th = args.spike_threshold if args.spike_threshold is not None else cfg.spike_threshold
     dur = C.parse_duration(args.spike_min_duration) if args.spike_min_duration else cfg.spike_min_duration
-    return {"spike_threshold": th, "spike_min_minutes": max(1, round(dur / 60))}
+    cap = {}  # [capacity <model>] blocks: datasheet values to compare against
+    if cfg.raw is not None:
+        for sec in cfg.raw.sections():
+            m = re.fullmatch(r"capacity\s+(\S+)", sec)
+            if m:
+                cap[m.group(1)] = {k: float(v) for k, v in cfg.raw[sec].items()
+                                   if k in ("firewall_gbps", "threat_gbps", "ipsec_gbps", "cps") and v.strip()}
+    return {"spike_threshold": th, "spike_min_minutes": max(1, round(dur / 60)), "capacity": cap}
 
 
 def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: str, anon=None,
@@ -245,6 +252,8 @@ def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: s
     if unknown:
         raise SystemExit(f"unknown section(s): {', '.join(unknown)} - known: {', '.join(SECTIONS)}")
     ctx = Ctx(ds=ds, outdir=outdir, settings=settings or {})
+    ctx.settings.setdefault("report_kind", "custom selection" if sections else
+                            {"standard": "standard", "load": "standard", "extended": "extended"}.get(profile, profile))
     if anon is not None:
         ctx.find("info", "Anonymization", anon.summary())
     pdf = outdir / f"{ds.meta.get('hostname', 'device')}_{outdir.name}.pdf"
@@ -428,6 +437,8 @@ def main(argv=None) -> int:
     ap.add_argument("-v", "--verbose", action="store_true", help="show progress in the terminal and log debug details")
     ap.add_argument("-a", "--anonymize", dest="pre_anonymize", action="store_true",
                     help="anonymized report - same as -a after 'tsf' or 'report'")
+    ap.add_argument("-x", "--extended", dest="pre_extended", action="store_true",
+                    help="extended report - same as -x after 'tsf' or 'report'")
     ap.add_argument("-V", "--version", action="version",
                     version=f"pan-ngfw-load {__version__}" + ("" if live else " (TSF-only)"))
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="command", title="commands")
@@ -440,7 +451,10 @@ def main(argv=None) -> int:
                        help="replace hostname, serial number and the device's own IP addresses in the report")
         p.add_argument("--alias", help="name used instead of the hostname with --anonymize (default: firewall)")
         p.add_argument("-o", "--out", type=Path, help="output base directory (default: report_dir)")
-        p.add_argument("-p", "--profile", default="load", help="section profile (default: load)")
+        p.add_argument("-x", "--extended", action="store_true",
+                       help="extended report: adds drops/errors, interfaces, IPsec VPN and capacity")
+        p.add_argument("-p", "--profile", default="standard",
+                       help="section profile: standard (default), extended, dp")
         p.add_argument("-s", "--sections", help="comma-separated sections, overrides --profile")
         p.add_argument("--spike-threshold", type=float, metavar="POINTS",
                        help="core spike: load points above the median of the other DP cores (default: config, 10)")
@@ -492,6 +506,12 @@ def main(argv=None) -> int:
         if not hasattr(args, "anonymize"):
             ap.error(f"-a/--anonymize only applies to {'tsf and report' if live else 'tsf'}, not to '{args.cmd}'")
         args.anonymize = True
+    if args.pre_extended:
+        if not hasattr(args, "extended"):
+            ap.error(f"-x/--extended only applies to {'tsf and report' if live else 'tsf'}, not to '{args.cmd}'")
+        args.extended = True
+    if getattr(args, "extended", False) and args.profile == "standard":
+        args.profile = "extended"
 
     cfg = C.load(args.config)
     if args.cmd not in ("init", "status", "cron", "tsf") and not cfg.path.exists():

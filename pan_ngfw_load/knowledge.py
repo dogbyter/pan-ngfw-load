@@ -137,3 +137,93 @@ FUNC_HELP = {
     "ctd_token": "Content inspection tokenizer",
     "session_ager": "Session ageing",
 }
+
+
+# --- dataplane resources (show running resource-monitor, "Resource utilization") ---------
+# What the counters mean, in plain words. PAN-OS doesn't document them in detail; the texts
+# describe how they behave and what a high value means in practice.
+RESOURCES = {
+    "packet buffer": (
+        "Packet buffers",
+        "Memory that holds the content of packets while the dataplane works on them - from arrival until they "
+        "are sent or dropped. The value is the share of the buffer pool in use.",
+        "High values mean packets arrive faster than the cores finish them, or are held back (reassembly, "
+        "inspection, a slow egress port). At 100% new packets are dropped. Packet Buffer Protection (zone setting) "
+        "can drop the sessions that hog buffers before that happens.",
+    ),
+    "packet descriptor": (
+        "Packet descriptors",
+        "Small bookkeeping entries, one per packet in flight, that point to the buffer and carry the packet's "
+        "metadata. Each packet needs one, whatever its size.",
+        "Many small packets (VoIP, DNS, floods) use descriptors faster than buffers. If descriptors run out, "
+        "packets are dropped even with buffers left.",
+    ),
+    "sw tags descriptor": (
+        "Software tag descriptors",
+        "Work items waiting in the dataplane's software scheduler. Packets of one session carry the same tag so "
+        "they are processed in order; the descriptors track this queued work.",
+        "High values mean work piles up faster than the cores take it: traffic bursts, or many packets of a few "
+        "large sessions that have to be handled one after another. Short peaks are normal; sustained high values "
+        "go along with latency and, at the limit, drops.",
+    ),
+    "session": (
+        "Session table",
+        "Share of the session table in use: allocated sessions compared with the maximum this model supports.",
+        "When it is full, new connections fail. Long timeouts, scans and floods (many half-open sessions) fill it "
+        "faster than real traffic does.",
+    ),
+}
+
+# Counters that show a resource ran out (shown with the resource section when non-zero)
+RESOURCE_COUNTERS = re.compile(
+    r"^(pkt_alloc_failure|flow_dos_pbp_\w+|flow_session_alloc_fail\w*|session_alloc_fail\w*|"
+    r"\w*_buf\w*_alloc_failure|\w*(desc|descriptor)\w*(fail|drop|full)\w*|flow_rcv_\w*nobuf\w*)$")
+# Lost logs (health section)
+LOG_LOSS_COUNTERS = re.compile(r"^log_\w*loss\w*$")
+
+
+# --- management-plane processes (names as shown by 'top', may be cut at 9 characters + '+') -----
+# Meaning inferred from the process names and common PAN-OS knowledge.
+PROCESSES = {
+    "pan_task": "Dataplane worker threads (on platforms where DP and MP share the CPU)",
+    "pan_logdb": "Log database: stores and indexes logs on the local disk",
+    "pan_logdb_index": "Log database indexing",
+    "pan_reportd": "Report generation (scheduled and on-demand reports, ACC)",
+    "genindex": "Builds search indexes for the log database",
+    "logrcvr": "Receives logs from the dataplane and writes them to the log database",
+    "mgmtsrvr": "Management server: configuration, commits, web UI and API backend",
+    "configd": "Configuration daemon",
+    "devsrvr": "Device server: URL categories, User-ID group mapping, dynamic lists",
+    "useridd": "User-ID daemon: IP-to-user mappings",
+    "distributord": "Distributes User-ID and other mappings between processes and devices",
+    "identityclient": "Cloud Identity Engine client",
+    "authd": "Authentication of admins and users (LDAP, RADIUS, SAML, ...)",
+    "sysd": "System daemon: shared state database between processes",
+    "brdagent": "Board agent: hardware and dataplane interface monitoring",
+    "pan_comm": "Communication between management plane and dataplane",
+    "gpsvc": "GlobalProtect service",
+    "wifclient": "WildFire client: uploads files for analysis",
+    "dnsproxyd": "DNS proxy",
+    "routed": "Routing (legacy engine)",
+    "sslmgr": "Certificate manager: OCSP/CRL checks",
+    "cryptod": "Cryptographic operations (keys, certificates)",
+    "ikemgr": "IKE negotiation for IPsec VPNs",
+    "keymgr": "IPsec key management",
+    "snmpd": "SNMP agent",
+    "ntpd": "Time synchronisation",
+    "top": "The 'top' command used by mp-monitor itself",
+    "kni_single": "Kernel thread passing packets between dataplane and management plane",
+    "varrcvr": "Receives files and data from the dataplane (WildFire, data filtering)",
+    "md_batch": "Batch jobs of the management daemons",
+    "rcs": "Background service on the management plane (exact role undocumented)",
+}
+
+
+def process_desc(name: str) -> str:
+    n = name.rstrip("+").rstrip(".")
+    if n in PROCESSES:
+        return PROCESSES[n]
+    for k, v in PROCESSES.items():  # 'top' truncates long names: pan_repor+ -> pan_reportd
+        if name.endswith("+") and k.startswith(n):
+            return v
+    return ""

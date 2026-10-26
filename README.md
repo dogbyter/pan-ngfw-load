@@ -45,16 +45,25 @@ The findings are also printed in the terminal. The TSF is unpacked once into `~/
 
 ### What the report shows
 
-| Section | Answers |
-|---|---|
-| Summary of findings | the key results on one page, e.g. peak DP load, spiking cores, busiest applications |
-| Data coverage | which data the TSF holds and how far back each source reaches |
-| Dataplane CPU load | load per DP core: per week, per day, per hour (24 h) and per minute (~2 days), daily profile |
-| Core spikes | *only when a core spikes*: which cores run above the others, when, and what changes meanwhile (traffic profile, counters, IPsec, per-core work since boot, busiest tunnels) |
-| What consumes dataplane CPU | DP CPU time by processing stage, work group, feature and function - since boot and over time |
-| Traffic that drives the load | packets, new sessions and sessions over time, how closely the load follows them, top applications since boot |
-| Management plane CPU | MP CPU over 30 days, CPU split, load average |
-| Appendix | method and caveats |
+There are two report kinds. The **standard report** is the default; **`-x` / `--extended`** adds four sections for a deeper look.
+
+| Section | Answers | Report |
+|---|---|---|
+| Summary of findings | the key results on one page (info / notice / warning) | both |
+| Data coverage | which data the TSF holds and how far back each source reaches | both |
+| Dataplane CPU load | load per DP core: per week, per day, per hour (24 h) and per minute (~2 days), daily profile. More than 8 cores: the colours repeat with dashed/dotted lines and hatched bars; the extended report draws heatmaps instead (one row per core) | both |
+| Core spikes | *only when a core spikes*: which cores run above the others, when, and what changes meanwhile (traffic profile, counters, IPsec, per-core work, busiest tunnels) | both |
+| Dataplane resources | packet buffers, packet descriptors, software tag descriptors, session table: what each one is, how full it got (minute to 13 weeks), whether one ran out | both |
+| Drops and errors | all drop/error counters since boot, grouped by meaning (policy, network/config, TCP quality, inspection skipped, cloud lookups, resources), largest ones over time | extended |
+| What consumes dataplane CPU | DP CPU time by processing stage, work group, feature and function - since boot and over time | both |
+| Traffic that drives the load | packets, new sessions and sessions over time, how closely the load follows them, top applications since boot | both |
+| Interfaces | traffic per port since boot, average use of the link speed, receive errors per million packets | extended |
+| IPsec VPN | tunnels and their state, encryption (GCM vs CBC), traffic per tunnel interface, ESP rates over time, IPsec share of DP CPU | extended |
+| Sessions | session table use, TCP/UDP/ICMP mix over time, what the listed sessions are (applications, zone pairs, ports, NAT) | both |
+| Capacity | measured peaks against the model's limits, and how much more traffic the dataplane takes at the current mix before it reaches 80% | extended |
+| Management plane | MP CPU over 30 days, CPU split, processes with their meaning and over time, memory, MP network interfaces, load average | both |
+| Health and stability | last boot, crash reports, processes, HA pair, hardware sensors, disk space, lost logs | both |
+| Appendix | method and caveats | both |
 
 ### How far back a TSF reaches
 
@@ -72,6 +81,7 @@ So the **longest DP history** is the weekly resource-monitor data (up to 13 week
 ### Options
 
 ```sh
+pan-ngfw-load tsf -x file.tgz                       # extended report
 pan-ngfw-load tsf -a file.tgz                       # anonymized (see below)
 pan-ngfw-load tsf file.tgz -o /tmp/reports          # other output directory
 pan-ngfw-load tsf file.tgz -p dp                    # DP-only profile (no MP section)
@@ -79,6 +89,16 @@ pan-ngfw-load tsf file.tgz -s dp_load,core_spikes   # only these sections
 pan-ngfw-load tsf file.tgz --spike-threshold 15 --spike-min-duration 30m
 pan-ngfw-load tsf extracted_dir/                    # an already unpacked TSF works too
 pan-ngfw-load -h tsf                                # all options
+```
+
+**Capacity (extended):** the session maximum comes from the firewall itself. Datasheet figures for throughput and connections per second are not built in - published values differ between sources and PAN-OS versions. To compare against them, put the official values into the config file (see [docs/SETUP.md](docs/SETUP.md#6-configuration-reference)):
+
+```ini
+[capacity PA-3410]
+firewall_gbps = 0      # firewall throughput (appmix)
+threat_gbps = 0        # threat prevention throughput
+ipsec_gbps = 0         # IPsec VPN throughput
+cps = 0                # new sessions per second
 ```
 
 **Core spikes:** a core *spikes* while its per-minute load is at least **10 points** above the median of the other DP cores for at least **15 minutes**. Comparing with the other cores, not with a fixed level, separates a real imbalance from a busy but evenly loaded firewall. Both values can be changed per run (above) or in the config file (`spike_threshold`, `spike_min_duration`).
@@ -135,7 +155,7 @@ pan-ngfw-load test
 | hourly | `pan-ngfw-load logs` | exports new traffic logs (incremental) |
 | daily 06:15 | `pan-ngfw-load report && pan-ngfw-load prune` | report for the last 7 days into `report_dir/<device>/latest/`, then retention clean-up |
 
-`pan-ngfw-load cron` prints the block and `pan-ngfw-load cron --install` installs it. For systemd timers see `contrib/systemd/`. Live reports have the same sections as TSF reports plus *Traffic logs - who generates the load*, and `-a` works the same way.
+`pan-ngfw-load cron` prints the block and `pan-ngfw-load cron --install` installs it. For systemd timers see `contrib/systemd/`. Live reports have the same sections as TSF reports plus *Traffic logs - who generates the load*; `-a` and `-x` work the same way. Health, interfaces, the IPsec overview and the session list need data that only a TSF contains - in live reports those parts are shorter or left out.
 
 Live-mode requirements: cron (or systemd timers), HTTPS from this host to the firewall's management IP, one admin account with a restricted role (`pan-ngfw-load init` explains it), and about 4 MB/day of samples plus ~3 MB/day of traffic logs per firewall (at ~6,000 logs/h).
 

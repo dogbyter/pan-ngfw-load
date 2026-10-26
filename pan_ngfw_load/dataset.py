@@ -78,7 +78,7 @@ def build_live(coll: Path, since: datetime | None = None) -> Dataset:
     _derive_pow(ds)
     _derive_rates(ds)
     if not ds.has("dpm_session"):
-        ds.notes.append("No samples yet - run ./tsfc.sh <name> snapshot or sample.")
+        ds.notes.append("No samples yet - run 'pan-ngfw-load sample' (or wait for the cron job).")
     _coverage(ds)
     return ds
 
@@ -154,6 +154,17 @@ def _from_cli(ds: Dataset) -> None:
     if (txt := d.get("show counter global")):
         _el, gc = simple.global_counters(txt)
         ds.t["counters_boot"] = gc
+    for key, cmd, fn in (("ha", "show high-availability all", simple.ha_status),
+                         ("environment", "show system environmentals", simple.environmentals),
+                         ("disk", "show system disk-space", simple.disk_space),
+                         ("software", "show system software status", simple.software_status),
+                         ("if_hw", "show interface all", simple.interface_hw),
+                         ("vpn_tunnels", "show vpn flow", simple.vpn_flow),
+                         ("vpn_sa", "show vpn ipsec-sa", simple.ipsec_sa)):
+        if (txt := d.get(cmd)):
+            ds.t[key] = fn(txt)
+    if ds.bundle.crashinfo:
+        ds.t["crashes"] = simple.crashinfo(ds.bundle.crashinfo)
     if (txt := d.get("debug dataplane pow status", -1)):  # repeated in a TSF; the last one is the newest
         ds.t["pow_status"] = simple.pow_status(txt)
     if (txt := d.get("show counter interface all")):

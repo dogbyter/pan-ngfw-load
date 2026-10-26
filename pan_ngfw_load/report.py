@@ -177,6 +177,9 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
                    if ctx.ds.source == "live" else
                    f"Tech support file {meta.get('bundle', '?')}, taken {_fmt(meta.get('tsf_time'))}; ") +
                   f"last boot {_fmt(meta.get('boot_time'))} (uptime {meta.get('uptime', '?')})", STY["subtitle"]),
+        Paragraph(f"Report: <b>{ctx.settings.get('report_kind', 'standard')}</b>"
+                  + (" - run with --extended for drops/errors, interfaces, IPsec VPN and capacity"
+                     if ctx.settings.get("report_kind") == "standard" else ""), STY["subtitle"]),
         Spacer(1, 14), ctx.h1("Summary of findings"),
     ]
     order = {"warning": 0, "notice": 1, "info": 2}

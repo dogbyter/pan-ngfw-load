@@ -41,8 +41,12 @@ def session_info(text: str) -> dict[str, float]:
     return out
 
 
+COUNTER_COLS = ["name", "value", "rate", "severity", "category", "aspect", "description"]
+
+
 def global_counters(text: str, block: int = 0) -> tuple[float | None, pd.DataFrame]:
-    """'show counter global' -> (elapsed_s, DataFrame[name, value, rate]) of the n-th block."""
+    """'show counter global' -> (elapsed_s, DataFrame[name, value, rate, severity, category, aspect, description])
+    of the n-th block. Short format (name value rate) leaves the extra columns empty."""
     blocks, cur, elapsed, in_tbl = [], None, None, False
     for line in _strip(text):
         s = line.strip()
@@ -61,16 +65,16 @@ def global_counters(text: str, block: int = 0) -> tuple[float | None, pd.DataFra
         if not in_tbl or s.startswith("---"):
             continue
         if s.startswith("Total counters shown"):
-            blocks.append((elapsed, pd.DataFrame(cur, columns=["name", "value", "rate"])))
+            blocks.append((elapsed, pd.DataFrame(cur, columns=COUNTER_COLS)))
             cur, in_tbl = None, False
             continue
-        toks = s.split()
-        if len(toks) == 3 and toks[1].isdigit():
-            cur.append((toks[0], float(toks[1]), float(toks[2])))
-        elif len(toks) >= 3 and toks[1].isdigit():  # detailed format with severity/category
-            cur.append((toks[0], float(toks[1]), float(toks[2]) if toks[2].isdigit() else float("nan")))
+        toks = s.split(None, 6)
+        if len(toks) >= 3 and toks[1].isdigit():
+            rate = float(toks[2]) if toks[2].isdigit() else float("nan")
+            extra = (toks[3:] + ["", "", "", ""])[:4] if len(toks) > 3 else ["", "", "", ""]
+            cur.append((toks[0], float(toks[1]), rate, *extra))
     if not blocks or block >= len(blocks):
-        return None, pd.DataFrame(columns=["name", "value", "rate"])
+        return None, pd.DataFrame(columns=COUNTER_COLS)
     return blocks[block]
 
 
@@ -135,7 +139,8 @@ def pow_status(text: str) -> pd.DataFrame:
 
 
 IF_COUNTERS = {"bytes received": "rx_bytes", "bytes transmitted": "tx_bytes",
-               "packets received": "rx_pkts", "packets transmitted": "tx_pkts"}
+               "packets received": "rx_pkts", "packets transmitted": "tx_pkts",
+               "receive errors": "rx_errors", "receive discarded": "rx_discards", "packets dropped": "drops"}
 
 
 def interface_counters(text: str) -> pd.DataFrame:
@@ -146,7 +151,8 @@ def interface_counters(text: str) -> pd.DataFrame:
         if (m := re.match(r"^Interface: (\S+)", line)):
             cur = rows.setdefault(m.group(1), {"interface": m.group(1)})
             continue
-        m = re.match(r"^(bytes received|bytes transmitted|packets received|packets transmitted)\s+(\d+)\s*$", line)
+        m = re.match(r"^(bytes received|bytes transmitted|packets received|packets transmitted|receive errors|"
+                     r"receive discarded|packets dropped)\s+(\d+)\s*$", line)
         if m and cur is not None and IF_COUNTERS[m.group(1)] not in cur:
             cur[IF_COUNTERS[m.group(1)]] = int(m.group(2))
     return pd.DataFrame(list(rows.values()), columns=["interface", *IF_COUNTERS.values()])
@@ -178,3 +184,122 @@ def ipsec_tunnels(config_xml: Path) -> pd.DataFrame:
             gws = [g.get("name") for g in e.findall("auto-key/ike-gateway/entry")]
             rows.append(dict(interface=ti, ipsec_tunnel=e.get("name"), peer=", ".join(peers.get(g, "") for g in gws)))
     return pd.DataFrame(rows, columns=["interface", "ipsec_tunnel", "peer"]).drop_duplicates("interface")
+
+
+def interface_hw(text: str) -> pd.DataFrame:
+    """'show interface all' hardware table -> interface, speed (Mbit/s), duplex, state."""
+    rows = []
+    for line in text.splitlines():
+        m = re.match(r"^(ethernet\S+|ae\d+)\s+\d+\s+(\S+/\S+)\s", line)
+        if m:
+            parts = m.group(2).split("/")  # speed/duplex/state[/fec]
+            if len(parts) >= 3:
+                rows.append(dict(interface=m.group(1), speed=float(parts[0]) if parts[0].isdigit() else float("nan"),
+                                 duplex=parts[1], state=parts[2].split("(")[0]))
+    return pd.DataFrame(rows, columns=["interface", "speed", "duplex", "state"]).drop_duplicates("interface")
+
+
+def ha_status(text: str) -> pd.DataFrame:
+    """'show high-availability all' -> key/value rows (enabled, mode, local/peer state, sync, links)."""
+    if "HA not enabled" in text:
+        return pd.DataFrame([("enabled", "no")], columns=["key", "value"])
+    rows, section, link = [("enabled", "yes")], "", ""
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("Local Information"):
+            section = "local"
+        elif s.startswith("Peer Information"):
+            section = "peer"
+        elif s.startswith(("Configuration Synchronization", "Link Monitoring", "Path Monitoring")):
+            section = ""
+        if (m := re.match(r"^(HA\d[\w ]*?) (?:Link|Control Link) Information", s)):
+            link = m.group(1)
+        if (m := re.match(r"^Mode: (.+)$", s)) and not any(k == "mode" for k, _ in rows):
+            rows.append(("mode", m.group(1)))
+        elif (m := re.match(r"^State: (.+)$", s)) and section:
+            rows.append((f"{section} state", m.group(1)))
+        elif (m := re.match(r"^Priority: (\d+)", s)) and section:
+            rows.append((f"{section} priority", m.group(1)))
+        elif (m := re.match(r"^State Synchronization: (.+)$", s)):
+            rows.append(("state synchronization", m.group(1)))
+        elif (m := re.match(r"^Running Configuration: (.+)$", s)):
+            rows.append(("running configuration", m.group(1)))
+        elif (m := re.match(r"^Link State: (\w+)", s)) and section == "local" and link:
+            rows.append((f"{link} link", m.group(1)))
+        elif (m := re.match(r"^Build Release: (.+)$", s)) and section:
+            rows.append((f"{section} software", m.group(1)))
+    return pd.DataFrame(rows, columns=["key", "value"]).drop_duplicates("key")
+
+
+def environmentals(text: str) -> pd.DataFrame:
+    """'show system environmentals' -> kind (thermal/fan/power), description, alarm, value, min, max."""
+    rows, kind = [], ""
+    for line in text.splitlines():
+        if (m := re.match(r"^-+(\w+)-+$", line.strip())):
+            kind = m.group(1).lower()
+            continue
+        m = re.match(r"^\s*S\d+\s+(.+?)\s+(True|False)\s+([\d.]+)\s+([\d.]+)(?:\s+([\d.]+))?\s*$", line)
+        if m and kind:
+            rows.append(dict(kind=kind, description=m.group(1), alarm=m.group(2) == "True", value=float(m.group(3)),
+                             min=float(m.group(4)), max=float(m.group(5)) if m.group(5) else float("nan")))
+    return pd.DataFrame(rows, columns=["kind", "description", "alarm", "value", "min", "max"])
+
+
+def disk_space(text: str) -> pd.DataFrame:
+    """'show system disk-space' (df -h) -> mount, size, used, avail, use_pct."""
+    rows = []
+    for line in text.splitlines():
+        m = re.match(r"^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)%\s+(/\S*)\s*$", line)
+        if m and m.group(1) not in ("none", "cgroup_root"):
+            rows.append(dict(filesystem=m.group(1), mount=m.group(6), size=m.group(2), used=m.group(3),
+                             avail=m.group(4), use_pct=float(m.group(5))))
+    return pd.DataFrame(rows, columns=["filesystem", "mount", "size", "used", "avail", "use_pct"])
+
+
+def software_status(text: str) -> pd.DataFrame:
+    """'show system software status' -> type (Group/Process), name, state."""
+    rows = []
+    for line in text.splitlines():
+        m = re.match(r"^(Group|Process)\s+(\S+)\s+(\S+)", line)
+        if m:
+            rows.append(dict(type=m.group(1), name=m.group(2), state=m.group(3)))
+    return pd.DataFrame(rows, columns=["type", "name", "state"])
+
+
+def crashinfo(files: list[Path]) -> pd.DataFrame:
+    """Crash summaries in opt/panlogs/cores/crashinfo -> process, time, PAN-OS version."""
+    rows = []
+    for f in files:
+        if not f.is_file():
+            continue
+        try:
+            head = f.read_text(encoding="utf-8", errors="replace")[:4000]
+        except OSError:
+            continue
+        m = re.search(r"Process (\S+): \w+, (\d+ \w+ \d{4} [\d:]+)", head)
+        when = pd.to_datetime(m.group(2), format="%d %b %Y %H:%M:%S", errors="coerce") if m else pd.NaT
+        v = re.search(r"cfg\.panos\.version: (\S+)", head)
+        rows.append(dict(process=m.group(1) if m else f.name.split("-")[0], time=when,
+                         version=v.group(1) if v else ""))
+    return pd.DataFrame(rows, columns=["process", "time", "version"])
+
+
+def vpn_flow(text: str) -> pd.DataFrame:
+    """'show vpn flow' -> tunnel id, name, state, local, peer."""
+    rows = []
+    for line in text.splitlines():
+        m = re.match(r"^(\d+)\s+(\S+)\s+(active|init|inactive|down|\w+)\s+(on|off)\s+(\S+)\s+(\S+)", line)
+        if m:
+            rows.append(dict(tunnel_id=int(m.group(1)), name=m.group(2), state=m.group(3), local=m.group(5),
+                             peer=m.group(6)))
+    return pd.DataFrame(rows, columns=["tunnel_id", "name", "state", "local", "peer"])
+
+
+def ipsec_sa(text: str) -> pd.DataFrame:
+    """'show vpn ipsec-sa' -> tunnel id and algorithm (e.g. ESP/A256/SHA256, ESP/G256)."""
+    rows = []
+    for line in text.splitlines():
+        m = re.match(r"^\S+\s+(\d+)\s+\S+\s+\S+\s+(ESP/\S+|AH/\S+)", line)
+        if m:
+            rows.append(dict(tunnel_id=int(m.group(1)), algorithm=m.group(2)))
+    return pd.DataFrame(rows, columns=["tunnel_id", "algorithm"]).drop_duplicates("tunnel_id")

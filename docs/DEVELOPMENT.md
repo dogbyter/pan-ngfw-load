@@ -29,7 +29,7 @@ A report always uses **one** source: a TSF or the live data of one device. Count
    - Tables: `ctx.ds["table"]`, `ctx.ds.has("table")`, `ctx.ds.meta`, `ctx.ds.source` (`"tsf"`/`"live"`)
    - Output: `ctx.h1/h2/p/small`, `ctx.figure(fig, name, caption)`, `ctx.table(df, widths_cm, fmt=...)`
    - Summary line: `ctx.find("info|notice|warning", "Area", "text")` → also lands in `findings.json`
-2. Register it in `pan_ngfw_load/sections/__init__.py` (`SECTIONS` and a profile). Select it with `pan-ngfw-load report -p <profile>` or `-s a,b`.
+2. Register it in `pan_ngfw_load/sections/__init__.py`: `SECTIONS`, then add it to `STANDARD` (default report) and/or `EXTENDED` (`-x`). Select single sections with `-s a,b`.
 3. If it needs new raw data:
    - TSF: add a parser in `pan_ngfw_load/parsers/` and wire it up in `dataset.py`.
    - Live: add the **read-only** command to `SAMPLE_CMDS` in `collect/core.py` (it must start with `show`, otherwise the allow-list blocks it) and parse it in `parsers/live.py`.

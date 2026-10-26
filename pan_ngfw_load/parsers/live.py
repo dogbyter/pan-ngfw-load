@@ -104,6 +104,14 @@ def counters_xml(root: ET.Element) -> list[tuple[str, float]]:
     return [(e.findtext("name"), float(e.findtext("value") or 0)) for e in root.findall(".//global/counters/entry")]
 
 
+def counters_full_xml(root: ET.Element) -> pd.DataFrame:
+    """Latest 'show counter global' -> same columns as the TSF table counters_boot (values since boot)."""
+    rows = [(e.findtext("name"), float(e.findtext("value") or 0), float(e.findtext("rate") or 0),
+             e.findtext("severity") or "", e.findtext("category") or "", e.findtext("aspect") or "",
+             e.findtext("desc") or "") for e in root.findall(".//global/counters/entry")]
+    return pd.DataFrame(rows, columns=simple.COUNTER_COLS)
+
+
 def _dir_time(name: str) -> datetime | None:
     try:
         return datetime.strptime(name[:15], "%Y%m%d_%H%M%S")
@@ -125,7 +133,7 @@ def load(coll: Path, since: datetime | None = None) -> dict:
 
     sess, minute, util, groups, counters, summ, procs, pow_rows = [], [], [], [], [], [], [], []
     pow_latest = None
-    rm_latest, rm_latest_ts, apps_latest = None, None, None
+    rm_latest, rm_latest_ts, apps_latest, counters_latest = None, None, None, None
     for d in sorted((coll / "samples").glob("*")):
         if since is not None and (dt := _dir_time(d.name)) is not None and dt < since:
             continue
@@ -150,6 +158,7 @@ def load(coll: Path, since: datetime | None = None) -> dict:
                         util.append((base - pd.Timedelta(minutes=i), metric, v, ts))
         if (r := _xml(d / "counter_global.xml")) is not None:
             counters.extend((ts, n, v) for n, v in counters_xml(r))
+            counters_latest = r
         if (r := _xml(d / "system_resources.xml")) is not None:
             row, pr = parse_top(ts, r.text or "")
             summ.append(row)
@@ -182,6 +191,8 @@ def load(coll: Path, since: datetime | None = None) -> dict:
     t["mpm_procs"] = pd.DataFrame(procs, columns=PROC_COLS)
     if apps_latest is not None:
         t["apps"] = apps_latest
+    if counters_latest is not None:
+        t["counters_boot"] = counters_full_xml(counters_latest)
 
     for kind in ("traffic", "threat"):
         files = sorted((coll / "logs").glob(f"{kind}_*.csv.gz")) + sorted((coll / "logs").glob(f"{kind}_*.csv"))

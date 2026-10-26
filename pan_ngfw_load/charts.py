@@ -58,6 +58,55 @@ W = 6.7
 VALUE_FS = 6  # direct value labels next to bars / points
 
 
+# More series than CAT has colours (e.g. DP cores): the colours start again, and each new round gets a second
+# visual feature so no two series look the same - line style for lines, hatching for bars. Grey stays reserved
+# for 'Other'. Three rounds = 24 distinguishable series.
+LINESTYLES = ["-", (0, (4, 1.6)), (0, (1, 1.4))]
+HATCHES = [None, "////", "...."]
+ROUND_NAMES = ["solid", "dashed / hatched", "dotted / dotted hatching"]
+
+
+def series_styles(keys: list) -> dict:
+    """key -> {color, ls, hatch, round} in rounds of len(CAT)."""
+    out = {}
+    for i, k in enumerate(keys):
+        r = (i // len(CAT)) % len(LINESTYLES)
+        out[k] = {"color": CAT[i % len(CAT)], "ls": LINESTYLES[r], "hatch": HATCHES[r], "round": r}
+    return out
+
+
+SEQ_CMAP = mcolors.LinearSegmentedColormap.from_list("seq", ["#ffffff"] + SEQ)
+
+
+def heat_cat(ax, mat: pd.DataFrame, vmax: float = 100):
+    """Heatmap: rows = mat.index (e.g. cores), columns = categories (weeks, hours). Returns the image."""
+    im = ax.imshow(mat.values.astype(float), aspect="auto", cmap=SEQ_CMAP, vmin=0, vmax=vmax, interpolation="nearest")
+    ax.set_yticks(range(len(mat.index)))
+    ax.set_yticklabels([str(i) for i in mat.index])
+    ax.grid(False)
+    return im
+
+
+def heat_time(ax, wide: pd.DataFrame, span_days: float, vmax: float = 100):
+    """Heatmap over time: wide.index = timestamps (regular), columns = rows of the map (e.g. cores)."""
+    x0, x1 = mdates.date2num(wide.index.min()), mdates.date2num(wide.index.max())
+    im = ax.imshow(wide.T.values.astype(float), aspect="auto", cmap=SEQ_CMAP, vmin=0, vmax=vmax,
+                   interpolation="nearest", extent=[x0, x1, len(wide.columns) - 0.5, -0.5])
+    ax.set_yticks(range(len(wide.columns)))
+    ax.set_yticklabels([str(c) for c in wide.columns])
+    ax.grid(False)
+    ax.xaxis_date()
+    time_axis(ax, span_days)
+    return im
+
+
+def heat_colorbar(f, im, ax, label: str):
+    cb = f.colorbar(im, ax=ax, fraction=0.025, pad=0.01)
+    cb.set_label(label)
+    cb.outline.set_visible(False)
+    return cb
+
+
 def fig(w=W, h=3.0):
     return plt.subplots(figsize=(w, h), dpi=150)
 
@@ -124,8 +173,21 @@ def stacked_area(ax, wide: pd.DataFrame, cmap: dict[str, str]):
                  labels=cols, colors=[cmap[c] for c in cols], linewidth=0)
 
 
-def legend_below(ax, ncol=4, y=-0.16):
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, y), ncol=ncol, handlelength=1.2, columnspacing=1.2)
+def legend_below(ax, ncol=4, y=-0.16, handlelength=1.2):
+    """Legend under the plot. More than 8 entries wrap into balanced rows that read left to right
+    (matplotlib fills legends column by column, so the entries are reordered and padded)."""
+    handles, labels = ax.get_legend_handles_labels()
+    n = len(handles)
+    if n > 8:
+        rows = -(-n // 8)
+        ncol = -(-n // rows)
+        blank = plt.Line2D([], [], alpha=0)
+        grid = [[(handles[r * ncol + c], labels[r * ncol + c]) if r * ncol + c < n else (blank, "")
+                 for c in range(ncol)] for r in range(rows)]
+        pairs = [grid[r][c] for c in range(ncol) for r in range(rows)]
+        handles, labels = [h for h, _l in pairs], [l for _h, l in pairs]
+    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, y), ncol=min(ncol, 8),
+              handlelength=handlelength, columnspacing=1.2)
 
 
 def human(v: float) -> str:

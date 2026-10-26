@@ -103,8 +103,14 @@ class Anonymizer:
         if m.get("bundle"):
             m["bundle"] = self.bundle_name(str(m["bundle"]), m.get("tsf_time"))
         m["anonymized"] = True
-        if "if_counters" in ds.t:  # tunnel names / VPN peers identify partners of the device owner
+        # tunnel names / VPN peers identify partners of the device owner
+        if "if_counters" in ds.t:
             ds.t["if_counters"] = ds.t["if_counters"].drop(columns=["ipsec_tunnel", "peer"], errors="ignore")
+        if "vpn_tunnels" in ds.t:
+            v = ds.t["vpn_tunnels"].drop(columns=["peer", "local"], errors="ignore")
+            bases = {b: f"vpn-{i + 1}" for i, b in enumerate(dict.fromkeys(v.name.str.split(":").str[0]))}
+            ds.t["vpn_tunnels"] = v.assign(name=[bases[n.split(":")[0]] + (":" + n.split(":", 1)[1] if ":" in n else "")
+                                                 for n in v.name])
         for k, df in list(ds.t.items()):
             ds.t[k] = self.frame(df)
 

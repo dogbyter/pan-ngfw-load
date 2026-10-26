@@ -19,7 +19,7 @@ def build(ctx):
         "best guess and refine it when Palo Alto Networks documentation or a TAC answer shows otherwise.",
         "<b>sar on shared-CPU platforms:</b> DP worker cores always look 100% busy (busy-polling). Only MP cores count.",
         "<b>No traffic logs</b> are in a TSF. Per-session, per-rule or per-source attribution needs logs from the "
-        "device. The live collector (tsfc) exports them through the read-only XML API.",
+        "device. The live collector of pan-ngfw-load exports them through the read-only XML API.",
     ]
     out = [ctx.h1(TITLE)] + [ctx.p("- " + t) for t in items]
     out.append(ctx.h2("Data files"))
@@ -33,6 +33,6 @@ def build(ctx):
         out.append(ctx.p("<br/>".join(f"{k}: {v}" for k, v in inv.items())))
     else:
         out[-1] = ctx.h2("Source")
-        out.append(ctx.p("Live collection via the read-only XML API (tsfc). The pow performance breakdown needs "
+        out.append(ctx.p("Live collection via the read-only XML API. The pow performance breakdown needs "
                          "superuser rights and is only available from tech support files."))
     return out

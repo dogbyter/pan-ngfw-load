@@ -15,37 +15,65 @@ def build(ctx):
     if not ds.has("rm_cpu"):
         return []
     cores = ds.meta.get("dp_cores") or []
-    cmap = C.colors_for([f"core {c}" for c in cores])
     rc = ds["rm_cpu"][ds["rm_cpu"].core.isin(cores)]
-    out = [ctx.h1(TITLE), ctx.p(
-        f"DP worker cores: {', '.join(map(str, cores))}. Each value is a core's utilisation in %. "
-        "<b>avg</b> is the mean over the period, <b>max</b> is the highest load sampled within it. "
-        "Short bursts show up only in <b>max</b>; the averages stay low.")]
+    many = len(cores) > len(C.CAT)
+    heat = many and ctx.settings.get("report_kind") == "extended"  # extended report: heatmaps for many cores
+    sty = C.series_styles([f"core {c}" for c in cores])
+    hl = 2.4 if many else 1.2  # legend handles long enough to show dashes
+    intro = (f"DP worker cores: {', '.join(map(str, cores))}. Each value is a core's utilisation in %. "
+             "<b>avg</b> is the mean over the period, <b>max</b> is the highest load sampled within it. "
+             "Short bursts show up only in <b>max</b>; the averages stay low.")
+    if heat:
+        intro += (f" With {len(cores)} cores the charts are heatmaps: one row per core, darker = higher load. "
+                  "A core that differs from the others shows up as a row of its own colour.")
+    elif many:
+        rounds = (len(cores) - 1) // len(C.CAT) + 1
+        intro += (f" This firewall has {len(cores)} DP cores - more than the {len(C.CAT)} colours that can be told "
+                  "apart. The colours repeat: cores " + "; ".join(
+                      f"{cores[i * len(C.CAT)]}-{cores[min(len(cores), (i + 1) * len(C.CAT)) - 1]} "
+                      f"{C.ROUND_NAMES[i % len(C.ROUND_NAMES)]}" for i in range(rounds)) + ". "
+                  "<b>Tip:</b> run the report with <b>-x / --extended</b> to get heatmaps instead (one row per core), "
+                  "which are easier to read with many cores. The extended report also adds more analysis: drops and "
+                  "errors, interfaces, IPsec VPN and capacity.")
+    out = [ctx.h1(TITLE), ctx.p(intro)]
 
-    # --- weeks + days: grouped bars avg/max --------------------------------
+    # --- weeks + days: grouped bars avg/max (heatmaps for many cores in the extended report) ---------
     for step, label, unit in ((604800, "week", "Week"), (86400, "day", "Day")):
         sub = rc[rc.step_s == step].dropna(subset=["avg"])
         if sub.empty:
             continue
         idxs = sorted(sub.idx.unique(), reverse=True)
+        ends = sub.drop_duplicates("idx").set_index("idx").end
+        labels = [(pd.Timestamp(ends[i]) - pd.Timedelta(seconds=step)).strftime("%d.%m.") +
+                  ("-" + pd.Timestamp(ends[i]).strftime("%d.%m.") if step > 86400 else "") for i in idxs]
+        if heat:
+            f, axes = C.plt.subplots(1, 2, figsize=(C.W, 0.2 * len(cores) + 1.3), dpi=150, sharey=True)
+            for ax, col, name in ((axes[0], "avg", "average"), (axes[1], "max", "max")):
+                mat = sub.pivot_table(index="core", columns="idx", values=col).reindex(index=cores, columns=idxs)
+                im = C.heat_cat(ax, mat)
+                ax.set_xticks(range(len(idxs)))
+                ax.set_xticklabels(labels, rotation=45 if step > 86400 else 0, ha="right" if step > 86400 else "center")
+                ax.set_title(f"Per {label}: {name}")
+            axes[0].set_ylabel("DP core")
+            C.heat_colorbar(f, im, axes[1], "load %")
+            out.append(ctx.figure(f, f"dp_load_{label}"))
+            continue
         f, ax = C.fig(C.W, 2.6)
         w = 0.8 / len(cores)
         for j, c in enumerate(cores):
+            st = sty[f"core {c}"]
             s = sub[sub.core == c].set_index("idx").reindex(idxs)
             x = np.arange(len(idxs)) + (j - (len(cores) - 1) / 2) * w
-            ax.bar(x, s["max"], width=w * 0.92, color=cmap[f"core {c}"], alpha=0.35, edgecolor=C.SURFACE, label=None)
-            ax.bar(x, s["avg"], width=w * 0.92, color=cmap[f"core {c}"], edgecolor=C.SURFACE, label=f"core {c}")
-            for xi, v in zip(x, s["max"]):
-                if v >= 20:
-                    ax.text(xi, v + 1, f"{v:.0f}", ha="center", fontsize=C.VALUE_FS, color=C.INK2)
-        ends = sub.drop_duplicates("idx").set_index("idx").end
+            ax.bar(x, s["max"], width=w * 0.92, color=st["color"], alpha=0.35, edgecolor=C.SURFACE, hatch=st["hatch"],
+                   linewidth=0.3, label=None)
+            ax.bar(x, s["avg"], width=w * 0.92, color=st["color"], edgecolor=C.SURFACE, hatch=st["hatch"],
+                   linewidth=0.3, label=f"core {c}")
         ax.set_xticks(range(len(idxs)))
-        ax.set_xticklabels([(pd.Timestamp(ends[i]) - pd.Timedelta(seconds=step)).strftime("%d.%m.") +
-                            ("-" + pd.Timestamp(ends[i]).strftime("%d.%m.") if step > 86400 else "") for i in idxs])
+        ax.set_xticklabels(labels)
         ax.set_ylim(0, 105)
         ax.set_ylabel("load %")
         ax.set_title(f"Per {label}: average (solid) and max (light) per DP core")
-        C.legend_below(ax, len(cores))
+        C.legend_below(ax, len(cores), handlelength=1.6 if many else 1.2)
         cap = (f"Averages are {sub['avg'].min():.0f}-{sub['avg'].max():.0f}% in every {label}, so the solid bars "
                "may be too small to see.") if sub["avg"].max() < 3 else None
         out.append(ctx.figure(f, f"dp_load_{label}", cap))
@@ -53,63 +81,78 @@ def build(ctx):
     # --- last 24 h hourly max ------------------------------------------------
     sub = rc[rc.step_s == 3600].dropna(subset=["max"])
     if not sub.empty:
-        f, ax = C.fig(C.W, 2.4)
-        for c in cores:
-            s = sub[sub.core == c].sort_values("end")
-            ax.plot(s.end, s["max"], color=cmap[f"core {c}"], label=f"core {c}", marker="o", markersize=2.5)
-        C.time_axis(ax, 1)
-        ax.set_ylabel("max load %")
-        ax.set_title("Last 24 hours: hourly max per DP core")
-        C.legend_below(ax, len(cores))
+        if heat:
+            wide = sub.pivot_table(index="end", columns="core", values="max").sort_index().reindex(columns=cores)
+            f, ax = C.fig(C.W, 0.2 * len(cores) + 1.0)
+            im = C.heat_time(ax, wide, 1)
+            ax.set_ylabel("DP core")
+            ax.set_title("Last 24 hours: hourly max per DP core")
+            C.heat_colorbar(f, im, ax, "max load %")
+        else:
+            f, ax = C.fig(C.W, 2.4)
+            for c in cores:
+                st = sty[f"core {c}"]
+                s = sub[sub.core == c].sort_values("end")
+                ax.plot(s.end, s["max"], color=st["color"], ls=st["ls"], label=f"core {c}", marker="o", markersize=2.5)
+            C.time_axis(ax, 1)
+            ax.set_ylabel("max load %")
+            ax.set_title("Last 24 hours: hourly max per DP core")
+            C.legend_below(ax, len(cores), handlelength=hl)
         out.append(ctx.figure(f, "dp_load_24h"))
 
     # --- per-minute series from dp-monitor ----------------------------------
     if ds.has("dpm_minute"):
         m = ds["dpm_minute"][ds["dpm_minute"].core.isin(cores)]
         span = (m.ts.max() - m.ts.min()).total_seconds() / 86400
-        f, (a1, a2) = C.plt.subplots(2, 1, figsize=(C.W, 4.4), dpi=150, sharex=True)
-        for c in cores:
-            s = m[m.core == c].set_index("ts").sort_index()
-            a1.plot(s.index, s["max"], color=cmap[f"core {c}"], lw=0.8, label=f"core {c}")
-            a2.plot(s.index, s["avg"].rolling(10, min_periods=1).mean(), color=cmap[f"core {c}"], lw=1.2, label=f"core {c}")
-        a1.set_title(f"Per minute, last {span:.1f} days: max per core")
-        a1.set_ylabel("max load %")
-        a2.set_title("Per minute: average per core (10-minute rolling mean)")
-        a2.set_ylabel("avg load %")
-        C.time_axis(a2, span)
-        C.legend_below(a2, len(cores))
+        if heat:
+            f, (a1, a2) = C.plt.subplots(2, 1, figsize=(C.W, 0.4 * len(cores) + 1.9), dpi=150, sharex=True)
+            for ax, col, how, title in ((a1, "max", "max", f"Per minute, last {span:.1f} days: max per core "
+                                                             "(highest minute of each 10 minutes)"),
+                                        (a2, "avg", "mean", "Per minute: average per core (10-minute mean)")):
+                wide = (m.pivot_table(index="ts", columns="core", values=col).sort_index()
+                        .resample("10min").agg(how).reindex(columns=cores))
+                im = C.heat_time(ax, wide, span)
+                ax.set_ylabel("DP core")
+                ax.set_title(title)
+                C.heat_colorbar(f, im, ax, f"{col} load %")
+        else:
+            f, (a1, a2) = C.plt.subplots(2, 1, figsize=(C.W, 4.4), dpi=150, sharex=True)
+            for c in cores:
+                st = sty[f"core {c}"]
+                s = m[m.core == c].set_index("ts").sort_index()
+                a1.plot(s.index, s["max"], color=st["color"], ls=st["ls"], lw=0.8, label=f"core {c}")
+                a2.plot(s.index, s["avg"].rolling(10, min_periods=1).mean(), color=st["color"], ls=st["ls"], lw=1.2,
+                        label=f"core {c}")
+            a1.set_title(f"Per minute, last {span:.1f} days: max per core")
+            a1.set_ylabel("max load %")
+            a2.set_title("Per minute: average per core (10-minute rolling mean)")
+            a2.set_ylabel("avg load %")
+            C.time_axis(a2, span)
+            C.legend_below(a2, len(cores), handlelength=hl)
         out.append(ctx.figure(f, "dp_load_minute"))
 
         # hour-of-day profile of the per-minute max
         prof = m.assign(h=m.ts.dt.hour).groupby(["h", "core"])["max"].quantile(0.95).unstack()
-        f, ax = C.fig(C.W, 2.3)
-        for c in cores:
-            ax.plot(prof.index, prof[c], color=cmap[f"core {c}"], marker="o", markersize=2.5, label=f"core {c}")
-        ax.set_xticks(range(0, 24, 2))
-        ax.set_xlabel("hour of day")
-        ax.set_ylabel("p95 of minute max %")
+        if heat:
+            mat = prof.reindex(index=range(24), columns=cores).T
+            f, ax = C.fig(C.W, 0.2 * len(cores) + 1.0)
+            im = C.heat_cat(ax, mat)
+            ax.set_xticks(range(0, 24, 2))
+            ax.set_xticklabels([f"{h:02d}" for h in range(0, 24, 2)])
+            ax.set_xlabel("hour of day")
+            ax.set_ylabel("DP core")
+            C.heat_colorbar(f, im, ax, "p95 of minute max %")
+        else:
+            f, ax = C.fig(C.W, 2.3)
+            for c in cores:
+                st = sty[f"core {c}"]
+                ax.plot(prof.index, prof[c], color=st["color"], ls=st["ls"], marker="o", markersize=2.5, label=f"core {c}")
+            ax.set_xticks(range(0, 24, 2))
+            ax.set_xlabel("hour of day")
+            ax.set_ylabel("p95 of minute max %")
+            C.legend_below(ax, len(cores), handlelength=hl)
         ax.set_title("Daily profile: 95th percentile of the per-minute max, by hour")
-        C.legend_below(ax, len(cores))
         out.append(ctx.figure(f, "dp_load_hour_profile"))
-
-    # --- resource utilisation (buffers, sessions) ---------------------------
-    ru = ds["rm_util"]
-    if not ru.empty:
-        rows = []
-        for metric in sorted(ru.metric.unique()):
-            if "average" in metric or metric in ("session", "packet buffer", "packet descriptor", "sw tags descriptor"):
-                continue
-            s = ru[(ru.metric == metric)]
-            for wname in ("hour", "day", "week"):
-                v = s[s.window == wname].value
-                if not v.empty:
-                    rows.append((metric.replace(" (maximum)", ""), wname, np.nanmax(v.values)))
-        if rows:
-            t = pd.DataFrame(rows, columns=["resource", "window", "max"]).pivot(index="resource", columns="window", values="max")
-            t = t.reindex(columns=[c for c in ("hour", "day", "week") if c in t.columns]).reset_index()
-            t.columns = ["resource"] + [f"max % ({c}ly samples)" for c in t.columns[1:]]
-            out += [ctx.h2("Other DP resources (max utilisation %)"),
-                    ctx.table(t, [4.5] + [3.5] * (len(t.columns) - 1), fmt={c: lambda v: f"{v:.0f}" for c in t.columns[1:]})]
 
     # --- findings ------------------------------------------------------------
     wk = rc[rc.step_s == 604800].dropna(subset=["max"])
