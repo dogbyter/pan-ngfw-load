@@ -7,4 +7,4 @@ Add a new focus area by dropping a module into pan_ngfw_load/sections/ and listi
 pan_ngfw_load/sections/__init__.py (see README.md).
 """
 
-__version__ = "0.9.5"
+__version__ = "0.9.6"

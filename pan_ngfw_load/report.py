@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -94,6 +95,7 @@ class Ctx:
         fmt = fmt or {}
         df = df.head(max_rows)
         data = [[Paragraph(f"<b>{c}</b>", STY["cell"]) for c in df.columns]]
+        texts = [[] for _ in df.columns]  # cell texts per column, to size the columns
         for _, r in df.iterrows():
             row = []
             for c in df.columns:
@@ -105,8 +107,9 @@ class Ctx:
                 elif isinstance(v, (pd.Timestamp, datetime)):
                     v = v.strftime("%Y-%m-%d %H:%M")
                 row.append(Paragraph(str(v), STY["cell"]))
+                texts[len(row) - 1].append(str(v))
             data.append(row)
-        widths = _fit_headers([str(c) for c in df.columns], col_widths) if col_widths else None
+        widths = _fit_columns([str(c) for c in df.columns], texts, col_widths) if col_widths else None
         t = Table(data, colWidths=[w * cm for w in widths] if widths else None, repeatRows=1, hAlign="LEFT")
         t.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), HEAD_BG),
@@ -120,12 +123,29 @@ class Ctx:
 CELL_PAD = 12  # points: reportlab's default left + right cell padding
 
 
-def _fit_headers(headers: list[str], widths: list[float]) -> list[float]:
-    """Widen columns whose header has a word longer than the column (it would be split mid-word) and take the
-    space from the widest columns, so the table keeps its total width."""
+SHORT_CELL = 18  # characters: values up to this length (numbers, numbers with a unit) are kept on one line
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"<[^>]+>", "", text).replace("&nbsp;", " ")
+
+
+def _fit_columns(headers: list[str], cells: list[list[str]], widths: list[float]) -> list[float]:
+    """Widen columns so that no header word and no short value (number, number with unit) is split over two lines,
+    and take the space from the columns with the most room (usually free text that can wrap), so the table keeps its
+    total width."""
     widths = list(widths[:len(headers)]) + [widths[-1]] * max(0, len(headers) - len(widths))
-    need = [(max(stringWidth(w, "Helvetica-Bold", STY["cell"].fontSize) for w in h.split() or [""]) + CELL_PAD + 4) / cm
-            for h in headers]
+    fs = STY["cell"].fontSize
+    need = []
+    for h, col in zip(headers, cells + [[]] * (len(headers) - len(cells))):
+        n = max(stringWidth(w, "Helvetica-Bold", fs) for w in h.split() or [""])
+        for t in col:
+            t = _plain(t).strip()
+            if not t:
+                continue
+            n = max(n, stringWidth(t, "Helvetica", fs) if len(t) <= SHORT_CELL else
+                    max(stringWidth(w, "Helvetica", fs) for w in t.split()))
+        need.append((n + CELL_PAD + 4) / cm)
     extra = sum(max(0.0, n - w) for n, w in zip(need, widths))
     if extra <= 0:
         return widths
@@ -140,6 +160,9 @@ def _fit_headers(headers: list[str], widths: list[float]) -> list[float]:
         out[i] -= give
         extra -= give
     return out
+
+
+_fit_headers = lambda headers, widths: _fit_columns(headers, [], widths)  # header-only variant
 
 
 def _footer(meta):

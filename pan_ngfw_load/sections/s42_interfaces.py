@@ -172,12 +172,13 @@ def _subinterfaces(ctx, allc: pd.DataFrame, up: float | None) -> list:
     # --- traffic and drops -----------------------------------------------------------------
     cols = ["interface", "rx_bytes", "tx_bytes"] + (["rx_mbps", "tx_mbps"] if up else []) + \
            ["pkt", "drops", "drop_ppm", "arp_not_found", "flow_state_drops"]
-    tab = sc[cols].rename(columns={"rx_bytes": "received", "tx_bytes": "sent", "rx_mbps": "avg in", "tx_mbps": "avg out",
+    tab = sc[cols].rename(columns={"rx_bytes": "received", "tx_bytes": "sent", "rx_mbps": "avg in Mb/s",
+                                   "tx_mbps": "avg out Mb/s",
                                    "pkt": "avg pkt in", "drops": "dropped", "drop_ppm": "dropped / M pkts",
                                    "arp_not_found": "ARP not found", "flow_state_drops": "flow state drops"})
     num = lambda v: f"{v:,.0f}"
     fmt = {"received": lambda v: C.human(v) + "B", "sent": lambda v: C.human(v) + "B",
-           "avg in": lambda v: f"{v:,.1f} Mb/s", "avg out": lambda v: f"{v:,.1f} Mb/s",
+           "avg in Mb/s": lambda v: f"{v:,.1f}", "avg out Mb/s": lambda v: f"{v:,.1f}",
            "avg pkt in": lambda v: "-" if pd.isna(v) else f"{v:,.0f} B", "dropped": num,
            "dropped / M pkts": lambda v: "-" if pd.isna(v) else f"{v:,.0f}", "ARP not found": num,
            "flow state drops": num}
