@@ -47,6 +47,9 @@ def group_desc(name: str) -> str:
 # --- functions -> feature categories ----------------------------------------
 # Functions that measure waiting time (latency), not CPU time. Excluded from CPU shares.
 NOT_CPU = re.compile(r"latency|^poll_delay")
+# Groups that measure waiting for an offload engine, not CPU time: on PA-7500 qat_result accumulates seconds per
+# item, more than all DP cores together could work since boot. Left out of every CPU share.
+NOT_CPU_GROUPS = {"qat_result"}
 
 FEATURES = [
     ("App-ID & protocol decoders", r"^(appid_|detector_run|sml_vm|cad_appsig|http2_)"),

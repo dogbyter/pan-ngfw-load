@@ -19,6 +19,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table,
                                 TableStyle)
+from reportlab.platypus.tableofcontents import TableOfContents
 
 from . import __version__
 from .dataset import Dataset
@@ -31,16 +32,22 @@ LEVEL_COL = {"info": "#2a78d6", "notice": "#eda100", "warning": "#d03b3b"}
 DPI = 200  # chart PNG resolution
 
 _ss = getSampleStyleSheet()
-STY = {
+STY: dict = {
     "title": ParagraphStyle("t", parent=_ss["Title"], fontSize=22, leading=26, alignment=TA_LEFT, textColor=INK),
     "subtitle": ParagraphStyle("st", parent=_ss["Normal"], fontSize=11, leading=15, textColor=INK2),
     "h1": ParagraphStyle("h1", parent=_ss["Heading1"], fontSize=15, leading=19, textColor=INK, spaceBefore=4, spaceAfter=6),
     "h2": ParagraphStyle("h2", parent=_ss["Heading2"], fontSize=11.5, leading=15, textColor=INK, spaceBefore=8, spaceAfter=4),
+    "part": ParagraphStyle("part", parent=_ss["Title"], fontSize=20, leading=24, alignment=TA_LEFT, textColor=INK,
+                           spaceBefore=120, spaceAfter=10),
     "body": ParagraphStyle("b", parent=_ss["BodyText"], fontSize=9, leading=12.5, textColor=INK, spaceAfter=4),
     "small": ParagraphStyle("s", parent=_ss["BodyText"], fontSize=7.5, leading=10, textColor=INK2),
     "cell": ParagraphStyle("c", parent=_ss["BodyText"], fontSize=7.5, leading=9.5, textColor=INK),
+    "toc_title": ParagraphStyle("toct", parent=_ss["Heading1"], fontSize=15, leading=19, textColor=INK, spaceAfter=10),
     "find": ParagraphStyle("f", parent=_ss["BodyText"], fontSize=9, leading=12.5, textColor=INK, leftIndent=10),
 }
+STY["h1p"] = ParagraphStyle("h1p", parent=STY["h1"])  # h1/h2 inside a part (one DP of the --all-dps document)
+STY["h2p"] = ParagraphStyle("h2p", parent=STY["h2"])
+OUTLINE_LEVEL = {"part": 0, "h1": 0, "h2": 1, "h1p": 1, "h2p": 2}
 
 
 @dataclass
@@ -52,6 +59,10 @@ class Ctx:
     _n: int = 0
     _section: str = ""  # TITLE of the section being built
     _sec_no: int = 0
+    _suffix: str = ""  # appended to the section title, e.g. the DP a DP section covers
+    _part_no: int = 0  # > 0 inside a part (--all-dps document)
+    _label: str = ""  # DP the current section covers (chassis) - added to its findings
+    _whole: str = "all DPs"  # label of findings about the whole firewall or node (find(..., whole=True))
 
     @property
     def chartdir(self) -> Path:
@@ -64,14 +75,18 @@ class Ctx:
         """Section titles are numbered in the order they appear, so a skipped section leaves no gap."""
         if t == self._section and not t.startswith("Appendix"):
             self._sec_no += 1
-            t = f"{self._sec_no}&nbsp;&nbsp;{t}"
-        return Paragraph(t, STY["h1"])
-    def h2(self, t): return Paragraph(t, STY["h2"])
+            no = f"{self._part_no}.{self._sec_no}" if self._part_no else str(self._sec_no)
+            t = f"{no}&nbsp;&nbsp;{t}{self._suffix}"
+        return Paragraph(t, STY["h1p" if self._part_no else "h1"])
+    def h2(self, t): return Paragraph(t, STY["h2p" if self._part_no else "h2"])
     def p(self, t): return Paragraph(t, STY["body"])
     def small(self, t): return Paragraph(t, STY["small"])
 
-    def find(self, level: str, section: str, text: str):
-        """Register a finding (shown in the summary) - level: info | notice | warning."""
+    def find(self, level: str, section: str, text: str, whole: bool = False):
+        """Register a finding (shown in the summary) - level: info | notice | warning. whole: on chassis models the
+        finding is about the whole firewall although a DP section reports it (e.g. global counters)."""
+        if self._label:
+            section += f" ({self._whole})" if whole else f" ({self._label})"
         self.findings.append((level, section, text))
 
     def figure(self, f, name: str, caption: str | None = None, width_cm: float = 17.0):
@@ -176,7 +191,7 @@ def _footer(meta):
     return draw
 
 
-LEAD_STYLES = {"h1", "h2", "s"}  # headings and the small lead-in lines above tables
+LEAD_STYLES = {"h1", "h2", "h1p", "h2p", "s"}  # headings and the small lead-in lines above tables
 
 
 def _is_lead(f) -> bool:
@@ -204,39 +219,88 @@ def keep_leads_with_content(items: list) -> list:
     return out
 
 
-def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list | None = None) -> None:
+def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list | None = None,
+              parts: list | None = None, select_dp=None, tail: list | None = None) -> None:
+    """sections: modules in report order. parts: one part per DP (--all-dps document) or per cluster node, after the
+    sections - dicts {key, mods, title, sub, label, add_dp}; select_dp(key) loads that DP or node before its part is
+    built, select_dp(None) restores the report's own data before the tail. tail: modules after the parts."""
     meta = ctx.ds.meta
     body = []
-    for mod in sections:
+    base_ds = ctx.ds
+    part = {}
+
+    def run(mod):
+        """DP sections (DP_SCOPED True: one DP; 'partly': some findings from one DP's time series) name the DP they
+        cover - in the title and in their findings; inside a part, the findings carry the part's label."""
+        scope, m = getattr(mod, "DP_SCOPED", False), ctx.ds.meta
+        if part:
+            label = part["label"] + (f" {m.get('dp')}" if scope and part.get("add_dp") else "")
+        else:
+            label = (m.get("dp_label") or m.get("dp")) if scope else None
         ctx._section = mod.TITLE
+        ctx._suffix = f" - DP {label}" if label and scope is True and not part else ""
+        ctx._label = label or ""
+        ctx._whole = f"{part['label']}, all DPs" if part and part.get("add_dp") else "all DPs"
         try:
             flow = mod.build(ctx)
         except Exception as e:  # a broken section must not kill the report
             traceback.print_exc()
             ctx.find("warning", mod.TITLE, f"section failed: {type(e).__name__}: {e}")
             flow = [ctx.h1(mod.TITLE), ctx.p(f"<font color='#d03b3b'>Section failed: {type(e).__name__}: {e}</font>")]
+        ctx._label = ""
         if flow:
             body.extend(flow)
             body.append(PageBreak())
 
+    for mod in sections:
+        run(mod)
+    base = ctx._sec_no  # parts continue the numbering of the sections before them
+    for i, pt in enumerate(parts or []):
+        select_dp(pt["key"])
+        part.clear()
+        part.update(pt)
+        ctx._part_no = base + i + 1
+        ctx._sec_no = 0
+        body += [Paragraph(f"{ctx._part_no}&nbsp;&nbsp;{pt['title']}", STY["part"]),
+                 Paragraph(pt.get("sub") or "", STY["subtitle"]), PageBreak()]
+        for mod in pt["mods"]:
+            run(mod)
+    part.clear()
+    if parts:
+        select_dp(None)
+        ctx.ds = base_ds
+    ctx._part_no, ctx._sec_no = 0, base + len(parts or [])
+    for mod in tail or []:
+        run(mod)
+
     front = [
         Paragraph(title, STY["title"]),
+    ] + (_cluster_front(ctx.ds) if ctx.ds.nodes else [
         Paragraph(f"{meta.get('model', '?')} <b>{meta.get('hostname', '?')}</b> (SN {meta.get('serial', '?')}) - "
                   f"PAN-OS {meta.get('sw_version', '?')}", STY["subtitle"]),
         Paragraph((f"Live collection via XML API, latest sample {_fmt(meta.get('tsf_time'))}; "
                    if ctx.ds.source == "live" else
                    f"Tech support file {meta.get('bundle', '?')}, taken {_fmt(meta.get('tsf_time'))}; ") +
-                  f"last boot {_fmt(meta.get('boot_time'))} (uptime {meta.get('uptime', '?')})", STY["subtitle"]),
+                  f"last boot {_fmt(meta.get('boot_time'))} (uptime {meta.get('uptime', '?')})", STY["subtitle"])]) + [
         Paragraph(f"Report: <b>{ctx.settings.get('report_kind', 'standard')}</b>"
                   + (", with sub-interface detail" if ctx.settings.get("subinterfaces") else "")
                   + (" - run with --extended for drops/errors, interfaces, IPsec VPN and capacity"
                      if ctx.settings.get("report_kind") == "standard" else ""), STY["subtitle"]),
+        Paragraph(f"{len(ctx.ds.dps)} dataplanes - " + (f"DP sections for each of them, one part per DP"
+                  if ctx.settings.get("all_dps_doc") else f"DP sections for <b>{meta.get('dp')}</b>"), STY["subtitle"])
+        if ctx.ds.dps and not ctx.ds.nodes else Spacer(1, 0),
         Paragraph(f"Created with pan-ngfw-load {__version__} - an independent tool, not an official Palo Alto "
                   "Networks product (see the appendix).", STY["small"]),
         Spacer(1, 14), ctx.h1("Summary of findings"),
     ]
     order = {"warning": 0, "notice": 1, "info": 2}
-    for level, sec, text in sorted(ctx.findings, key=lambda f: order.get(f[0], 3)):
+    shown = ctx.findings
+    if ctx.settings.get("all_dps_doc"):  # one line per finding and DP would bury the summary - DP info lines stay out
+        dps = {f"({p['label']})" for p in parts}
+        shown = [f for f in ctx.findings if f[0] != "info" or not any(f[1].endswith(d) for d in dps)]
+        front.append(Paragraph(f"Warnings and notices of all {len(parts)} DPs; the info lines per DP are in "
+                               "findings.txt.", STY["small"]))
+    for level, sec, text in sorted(shown, key=lambda f: order.get(f[0], 3)):
         col = LEVEL_COL.get(level, "#52514e")
         front.append(Paragraph(f"<font color='{col}'><b>{level.upper()}</b></font> &nbsp;<i>{sec}</i> - {text}", STY["find"]))
     if ctx.ds.notes:
@@ -245,19 +309,63 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
             front.append(Paragraph(f"Note: {n}", STY["small"]))
     front.append(PageBreak())
 
+    # contents page: filled from the headings on a second pass (multiBuild); entries link to the sections
+    toc = TableOfContents()
+    toc.dotsMinLevel = 0
+    toc.levelStyles = [
+        ParagraphStyle("toc0", parent=STY["body"], fontName="Helvetica-Bold", fontSize=9.5, leading=14,
+                       leftIndent=0, spaceBefore=4),
+        ParagraphStyle("toc1", parent=STY["body"], fontSize=8.5, leading=11.5, leftIndent=14, textColor=INK2),
+    ]
+    front += [Paragraph("Contents", STY["toc_title"]), toc, PageBreak()]
+
     doc = SimpleDocTemplate(str(path), pagesize=A4, leftMargin=1.6 * cm, rightMargin=1.6 * cm,
                             topMargin=1.5 * cm, bottomMargin=1.6 * cm, title=title,
                             author="pan-ngfw-load", subject=meta.get("hostname", ""))
-    if layout_log is not None:  # for tests: (page, kind, text) of every heading and image as placed
-        def after(f):
-            if isinstance(f, Paragraph) and f.style.name in ("h1", "h2"):
-                layout_log.append((doc.page, f.style.name, f.getPlainText()[:60]))
-            elif isinstance(f, Image):
-                layout_log.append((doc.page, "img", Path(f.filename).stem))
-            elif isinstance(f, Table):
-                layout_log.append((doc.page, "table", ""))
-        doc.afterFlowable = after
-    doc.build(front + keep_leads_with_content(body), onFirstPage=_footer(meta), onLaterPages=_footer(meta))
+    counter = {"n": 0, "h1": False}
+
+    def before():  # multiBuild runs several passes - start each one fresh
+        counter.update(n=0, h1=False)
+        if layout_log is not None:
+            layout_log.clear()
+
+    def after(f):
+        if isinstance(f, Paragraph) and f.style.name in OUTLINE_LEVEL:
+            text = f.getPlainText().replace("\xa0", " ").strip()
+            level = OUTLINE_LEVEL[f.style.name]
+            if level == 1 and not counter["h1"]:
+                level = 0  # the outline needs a top-level entry first
+            counter["h1"] = counter["h1"] or level == 0
+            counter["n"] += 1
+            key = f"sec{counter['n']}"
+            top = doc.frame._y + getattr(f, "height", 0) + 6  # jump to the heading, not just the page
+            doc.canv.bookmarkPage(key, fit="XYZ", left=0, top=top)
+            doc.canv.addOutlineEntry(text, key, level=level, closed=level == 0)
+            if level == 0 and text != "Summary of findings":  # contents page: main sections only
+                doc.notify("TOCEntry", (level, text, doc.page, key))
+            if layout_log is not None:
+                layout_log.append((doc.page, f.style.name, text[:60]))
+        elif layout_log is not None and isinstance(f, Image):
+            layout_log.append((doc.page, "img", Path(f.filename).stem))
+        elif layout_log is not None and isinstance(f, Table):
+            layout_log.append((doc.page, "table", ""))
+
+    doc.beforeDocument = before
+    doc.afterFlowable = after
+    doc.multiBuild(front + keep_leads_with_content(body), onFirstPage=_footer(meta), onLaterPages=_footer(meta))
+
+
+def _cluster_front(ds) -> list:
+    """Title page lines of a cluster report: both nodes with their TSF."""
+    lead = ds.meta.get("cluster_leader")
+    out = [Paragraph(f"{ds.meta.get('model', '?')} NGFW cluster of {len(ds.nodes)} nodes - PAN-OS "
+                     f"{ds.meta.get('sw_version', '?')}", STY["subtitle"])]
+    for n, d in ds.nodes.items():
+        m = d.meta
+        out.append(Paragraph(f"Node {n}{' (leader)' if n == lead else ''}: <b>{m.get('hostname', '?')}</b> (SN "
+                             f"{m.get('serial', '?')}) - tech support file {m.get('bundle', '?')}, taken "
+                             f"{_fmt(m.get('tsf_time'))}; uptime {m.get('uptime', '?')}", STY["subtitle"]))
+    return out
 
 
 def _fmt(v):

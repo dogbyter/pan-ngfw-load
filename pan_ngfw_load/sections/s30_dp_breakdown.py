@@ -6,6 +6,7 @@ from .. import charts as C
 from .. import knowledge as K
 
 TITLE = "What consumes dataplane CPU"
+DP_SCOPED = True  # chassis models: covers one DP (see dataset.select_dp)
 
 STAGE_COLORS = C.colors_for(K.STAGE_ORDER)
 FEATURE_ORDER = [f for f, _ in K.FEATURES] + ["Other"]
@@ -26,7 +27,8 @@ def build(ctx):
         "<b>functions</b> (<i>debug dataplane pow performance</i>). The two views are measured separately. "
         "Functions can also run outside every group: the timer check <i>tim_check</i> alone uses more time than "
         "all groups together. So each view is compared only within itself. Functions that measure waiting "
-        "time (latency) are left out. Mapping functions to features (App-ID, threat inspection, ...) is "
+        "time (latency) are left out, and so is the group <i>qat_result</i>: it measures waiting for the QAT "
+        "crypto engine, not CPU work. Mapping functions to features (App-ID, threat inspection, ...) is "
         "inferred from their names.")]
 
     pb = ds["pow_boot"]

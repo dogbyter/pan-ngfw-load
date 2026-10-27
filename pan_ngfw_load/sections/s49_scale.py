@@ -19,7 +19,7 @@ def _derived(ds) -> list[tuple]:
         rows.append(("interfaces", len(lg), None, "interface list"))
         tags = pd.to_numeric(lg.tag, errors="coerce")
         rows.append(("vlan_tags", int((tags > 0).sum()), None, "interface list"))
-        rows.append(("aggregates", int(lg.interface.str.match(r"^ae\d+$").sum()), None, "interface list"))
+        rows.append(("aggregates", int(lg.interface.str.match(r"^(?:node\d+:)?ae\d+$").sum()), None, "interface list"))
     if ds.has("vpn_tunnels"):
         rows.append(("ipsec_tunnels", len(ds["vpn_tunnels"]), None, "runtime"))
     si = ds.meta.get("session_info") or {}

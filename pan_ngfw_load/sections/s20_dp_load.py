@@ -6,6 +6,7 @@ import pandas as pd
 from .. import charts as C
 
 TITLE = "Dataplane CPU load"
+DP_SCOPED = True  # chassis models: covers one DP (see dataset.select_dp)
 
 THRESH_NOTICE, THRESH_WARN = 60, 85  # % per-core max
 

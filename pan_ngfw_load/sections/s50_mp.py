@@ -19,7 +19,10 @@ def build(ctx):
     out = [ctx.h1(TITLE), ctx.p(
         "The management plane (MP) runs the web UI and API, commits, logging, reporting, User-ID, content "
         "updates and the dynamic services. It does not forward traffic, but a busy MP makes the GUI slow, delays "
-        "commits and can lose logs. This section shows how busy it is, which processes use it, and its memory.")]
+        "commits and can lose logs. This section shows how busy it is, which processes use it, and its memory."
+        + (" <b>NGFW cluster, non-leader node:</b> management runs on the leader node; this chassis works like a "
+           "line card of it. Its MP figures describe a control plane on standby - the TSF of the leader shows the "
+           "management load of the cluster." if ds.non_leader else ""))]
     dp = ds.meta.get("dp_cores") or []
     if dp:
         out.append(ctx.p(

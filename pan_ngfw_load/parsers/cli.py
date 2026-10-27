@@ -69,3 +69,17 @@ def parse_uptime(value: str) -> float | None:
         return None
     d, h, mi, s = (int(x or 0) for x in m.groups())
     return ((d * 24 + h) * 60 + mi) * 60 + s
+
+
+DP_HDR_RE = re.compile(r"^DP (s\d+dp\d+):\s*$", re.M)
+
+
+def split_dp(text: str | None) -> dict[str | None, str]:
+    """Chassis models (PA-7000/7500) print dataplane commands once per DP, each block headed 'DP s3dp0:'.
+    -> {'s3dp0': text, ...}; output without such headers -> {None: text}."""
+    if not text:
+        return {}
+    parts = DP_HDR_RE.split(text)
+    if len(parts) == 1:
+        return {None: text}
+    return {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}

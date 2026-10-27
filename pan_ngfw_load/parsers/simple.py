@@ -188,11 +188,15 @@ def ipsec_tunnels(config_xml: Path) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["interface", "ipsec_tunnel", "peer"]).drop_duplicates("interface")
 
 
+# NGFW clusters (PA-7500) prefix interfaces with the node: 'node1:ethernet1/3'. HSCI links: 'hsci-a', 'hsci-b'.
+NODE = r"(?:node\d+:)?"
+
+
 def interface_hw(text: str) -> pd.DataFrame:
     """'show interface all' hardware table -> interface, speed (Mbit/s), duplex, state."""
     rows = []
     for line in text.splitlines():
-        m = re.match(r"^(ethernet\S+|ae\d+)\s+\d+\s+(\S+/\S+)\s", line)
+        m = re.match(rf"^({NODE}(?:ethernet\S+|ae\d+)|hsci-[ab])\s+\d+\s+(\S+/\S+)\s", line)
         if m:
             parts = m.group(2).split("/")  # speed/duplex/state[/fec]
             if len(parts) >= 3:
@@ -201,10 +205,56 @@ def interface_hw(text: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["interface", "speed", "duplex", "state"]).drop_duplicates("interface")
 
 
+def cluster_status(text: str) -> pd.DataFrame:
+    """'show cluster all' (PA-7500 clustering) -> one row per node: node, this (bool), state, leader.
+    Node serial numbers and management IPs are left out (they identify the devices)."""
+    if "not enabled" in text:
+        return pd.DataFrame(columns=["node", "this", "state", "leader"])
+    local = re.search(r"^\s*Node ID: (\d+)", text, re.M)
+    rows, cur = [], None
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("Node serial:"):
+            cur = {"node": None, "state": "?", "leader": "?"}
+            rows.append(cur)
+        elif cur is not None and (m := re.match(r"^(node-id|state|leader): (.+)$", s)):
+            cur["node" if m.group(1) == "node-id" else m.group(1)] = m.group(2)
+    df = pd.DataFrame(rows, columns=["node", "state", "leader"])
+    df.insert(1, "this", df.node == (local.group(1) if local else None))
+    return df.sort_values("node").reset_index(drop=True)
+
+
+def cluster_settings(text: str) -> dict:
+    """'show cluster all' -> minimum chassis capacity: min_npc, min_dpc, on_loss ('degraded' / 'failed')."""
+    out = {}
+    for key, rx in (("cluster_id", r"Cluster ID: (\d+)"), ("node_id", r"^\s*Node ID: (\d+)"),
+                    ("min_npc", r"Minimum network cards: (\d+)"), ("min_dpc", r"Minimum data processing cards: (\d+)"),
+                    ("on_loss", r"State upon capacity loss: (\w+)")):
+        if (m := re.search(rx, text, re.M)):
+            out[key] = int(m.group(1)) if m.group(1).isdigit() else m.group(1)
+    return out
+
+
+def chassis_status(text: str) -> pd.DataFrame:
+    """'show chassis status' -> slot, card, card status, config status, role (inserted slots only)."""
+    rows = []
+    for line in text.splitlines():
+        m = re.match(r"^(\d+)\s+(PA-\S+)\s+(\S+(?: \S+)?)\s{2,}(\S+)\s*(\S*)\s*$", line)
+        if m:
+            rows.append((int(m.group(1)), m.group(2), m.group(3), m.group(4), m.group(5)))
+    traffic = re.search(r"Traffic enabled slots\s*:(.*)$", text, re.M)
+    df = pd.DataFrame(rows, columns=["slot", "card", "card status", "config status", "role"])
+    on = set(traffic.group(1).split()) if traffic else set()
+    df["traffic"] = ["yes" if str(s) in on else "no" for s in df.slot]
+    return df
+
+
 def ha_status(text: str) -> pd.DataFrame:
     """'show high-availability all' -> key/value rows (enabled, mode, local/peer state, sync, links)."""
     if "HA not enabled" in text:
         return pd.DataFrame([("enabled", "no")], columns=["key", "value"])
+    if "Invalid syntax" in text:  # PA-7500 with clustering: no HA commands
+        return pd.DataFrame(columns=["key", "value"])
     rows, section, link = [("enabled", "yes")], "", ""
     for line in text.splitlines():
         s = line.strip()
@@ -373,7 +423,7 @@ def lacp(text: str) -> pd.DataFrame:
             in_members = True
             continue
         if in_members:
-            m = re.match(r"^(ethernet\S+)\s+(yes|no)\s+(\S+)\s+(\S+)\s+(\S+)", s)
+            m = re.match(rf"^({NODE}ethernet\S+)\s+(yes|no)\s+(\S+)\s+(\S+)\s+(\S+)", s)
             if m:
                 rows.append(dict(ae=ae, interface=m.group(1), bundled=m.group(2), rx_state=m.group(3),
                                  mux_state=m.group(4), selection=m.group(5), mode="", rate=""))
@@ -432,8 +482,10 @@ def _pushed(config_xml: Path) -> bool:
 
 
 def running_rules(text: str) -> int:
-    """'show running security-policy' / nat-policy / ... -> number of rules in effect."""
-    return len(re.findall(r'; index: \d+" \{', text))
+    """'show running security-policy' / nat-policy / ... -> number of rules in effect. Chassis models print the
+    rule set once per DP ('DP s3dp0:' blocks) - every DP has the same rules, the largest block counts."""
+    from .cli import split_dp
+    return max((len(re.findall(r'; index: \d+" \{', t)) for t in split_dp(text).values()), default=0)
 
 
 def table_usage(text: str, kind: str) -> tuple[int | None, int | None]:

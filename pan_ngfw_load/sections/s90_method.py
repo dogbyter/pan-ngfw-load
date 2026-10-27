@@ -23,6 +23,16 @@ SOURCES = [
     ("Source code", "pan-ngfw-load (MIT license)", "https://github.com/dogbyter/pan-ngfw-load"),
 ]
 
+# Listed only in reports of chassis models (PA-7000/7500) and NGFW clusters - not in docs/SOURCES.md
+CHASSIS_SOURCES = [
+    ("NGFW clusters (PA-7500): nodes, states, HSCI links, MC-LAG", "PAN-OS Administrator's Guide: NGFW Clusters",
+     "https://docs.paloaltonetworks.com/ngfw/administration/ngfw-clustering/ngfw-clusters"),
+    ("NGFW cluster settings and verification commands", "Configure an NGFW Cluster",
+     "https://docs.paloaltonetworks.com/ngfw/administration/ngfw-clustering/configure-an-ngfw-cluster"),
+    ("Active/passive HA on PA-7500 (from PAN-OS 12.1.5)", "Configure Active/Passive HA",
+     "https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha/configure-activepassive-ha"),
+]
+
 NOTICE = (
     "pan-ngfw-load contains and uses <b>no non-public data</b>. Everything this report shows about the firewall comes "
     "from the firewall itself - its tech support file or its read-only XML API. Datasheet values come only from the "
@@ -56,13 +66,29 @@ def build(ctx):
         "<b>No traffic logs</b> are in a TSF. Per-session, per-rule or per-source attribution needs logs from the "
         "device. The live collector of pan-ngfw-load exports them through the read-only XML API.",
     ]
+    if ds.dps:
+        items.append(
+            f"<b>Chassis with {len(ds.dps)} dataplanes:</b> every DP has its own cores, resource-monitor, pow "
+            "performance and dp-monitor history (opt/var/s&lt;slot&gt;/dp&lt;n&gt;/ in the TSF). The DP sections cover one "
+            "DP each; global counters, sessions, application statistics and interface counters cover the whole "
+            "firewall. The busiest DP is the one with the highest mean core load over its dp-monitor history. The CSV "
+            "files of each DP are in <i>data/dp_&lt;name&gt;/</i> when the report was built with --all-dps.")
+    if ds.nodes:
+        items.append(
+            f"<b>Cluster report ({len(ds.nodes)} nodes):</b> each node counts only the traffic its own dataplanes "
+            "processed, also for ports of the other chassis. Counters, applications, sessions and interface traffic "
+            "are therefore added up over the nodes; that the shares add up is inferred from the counters (received "
+            "and sent bytes balance only over all nodes), not from vendor documentation. Management plane, "
+            "configuration, limits and logs come from the leader's TSF. 'Now' values are from the moment each TSF "
+            "was taken. Each node's own tables are in <i>data/node&lt;n&gt;/</i>.")
     out = [ctx.h1(TITLE), ctx.h2("About this report"), ctx.table(_about(ctx), [5.0, 12.0]), ctx.h2("Method and caveats")]
     out += [ctx.p("- " + t) for t in items]
     out.append(ctx.h2("Sources and legal notice"))
     out.append(ctx.p(NOTICE))
     import pandas as pd
     link = lambda u: f"<link href='{u}' color='#2a78d6'>{u}</link>" if u else "in the tech support file / API output"
-    out.append(ctx.table(pd.DataFrame([(w, t, link(u)) for w, t, u in SOURCES], columns=["used for", "source", "where"]),
+    src = SOURCES[:-3] + CHASSIS_SOURCES + SOURCES[-3:] if ds.dps or ds.has("cluster") else SOURCES
+    out.append(ctx.table(pd.DataFrame([(w, t, link(u)) for w, t, u in src], columns=["used for", "source", "where"]),
                          [4.6, 4.4, 8.0]))
     out.append(ctx.h2("Data files"))
     out.append(ctx.p("All tables behind this report are saved as CSV in <i>data/</i> next to this PDF, and every chart "
@@ -92,6 +118,16 @@ def _about(ctx):
         ("Report", kind),
         ("Source", "live collection (XML API)" if ctx.ds.source == "live" else "tech support file"),
         ("Anonymized", "yes" if meta.get("anonymized") else "no"),
+    ]
+    if ctx.ds.nodes:
+        rows.append(("Cluster", f"{len(ctx.ds.nodes)} nodes, leader node {meta.get('cluster_leader')}; DP sections for "
+                                "the busiest DP of each node: " + ", ".join(meta.get("dp_shown") or [])))
+    elif ctx.ds.dps:
+        n = len(ctx.ds.dps)
+        rows.append(("Dataplanes", f"{n} - DP sections for each of them (--all-dps)" if st.get("all_dps_doc") else
+                     f"{n} - DP sections for {meta.get('dp')} (" + ("chosen with --dp" if st.get("dp") else
+                                                                   "the busiest") + ")"))
+    rows += [
         ("Core spikes", f"{st.get('spike_threshold', 10):g} points above the other cores for "
                         f"{st.get('spike_min_minutes', 15)} min or longer"),
         ("Datasheet values", src if status == "ok" else "model not in the public product comparison"

@@ -6,6 +6,7 @@ import pandas as pd
 from .. import charts as C
 
 TITLE = "Traffic that drives the load"
+DP_SCOPED = "partly"  # chassis: rates and load over time come from one DP (see dataset.select_dp)
 
 
 def _rate(ds, name):
@@ -83,14 +84,14 @@ def build(ctx):
         t["share pkts"] = t.packets / a.packets.sum() * 100
         out.append(ctx.table(t[["app", "sessions", "packets", "bytes", "share pkts", "bytes/pkt", "pkt/session"]],
                              [4.4, 2.0, 2.2, 2.6, 1.8, 1.8, 2.0],
-                             fmt={"sessions": lambda v: f"{v:,}", "packets": lambda v: f"{v:,}", "bytes": lambda v: f"{v / 1e6:,.0f} MB",
+                             fmt={"sessions": lambda v: f"{v:,}", "packets": lambda v: f"{v:,}", "bytes": C.human_bytes,
                                   "share pkts": lambda v: f"{v:.1f}%", "bytes/pkt": lambda v: f"{v:,.0f}",
                                   "pkt/session": lambda v: f"{v:,.0f}"}))
         top_b, top_s = a.bytes.idxmax(), a.sessions.idxmax()
         ctx.find("info", "Traffic",
-                 f"Since boot, '{top_b}' carried the most bytes ({a.bytes.max() / 1e9:.1f} GB), '{a.packets.idxmax()}' "
+                 f"Since boot, '{top_b}' carried the most bytes ({C.human_bytes(a.bytes.max())}), '{a.packets.idxmax()}' "
                  f"the most packets, and '{top_s}' opened the most sessions ({a.sessions.max():,}). "
-                 f"High session counts drive slow-path work.")
+                 f"High session counts drive slow-path work.", whole=True)
 
     # --- session snapshot ----------------------------------------------------
     if ds.has("sessions_now"):

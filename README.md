@@ -38,7 +38,7 @@ The report goes to `~/pan-ngfw-load/reports/<hostname>/tsf_<file>/`:
 
 | File | Content |
 |---|---|
-| `<hostname>_tsf_<file>.pdf` | the report |
+| `<hostname>_tsf_<file>.pdf` | the report - summary of findings, a contents page with links to the sections (sections and sub-headings also as PDF bookmarks), the sections, appendix |
 | `findings.txt`, `findings.json` | the summary of findings (info / notice / warning) |
 | `charts/*.png` | every chart of the report |
 | `data/*.csv` | every table behind the report, for your own analysis |

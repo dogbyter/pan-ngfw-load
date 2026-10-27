@@ -11,6 +11,7 @@ import pandas as pd
 from .. import capacity as CAP
 
 TITLE = "Capacity - how much headroom is left"
+DP_SCOPED = "partly"  # chassis: rates and load over time come from one DP (see dataset.select_dp)
 
 CEILING = 80  # % DP load treated as the practical limit (latency and drops rise above)
 

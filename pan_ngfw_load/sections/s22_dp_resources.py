@@ -7,6 +7,7 @@ from .. import charts as C
 from .. import knowledge as K
 
 TITLE = "Dataplane resources - buffers, descriptors, session table"
+DP_SCOPED = True  # chassis models: covers one DP (see dataset.select_dp)
 
 NOTICE_MAX, WARN_MAX = 70, 90   # % peak (max) within the last 7 days
 NOTICE_AVG = 50                 # % weekly average
@@ -128,7 +129,7 @@ def build(ctx):
         else:
             cols = ["name", "value", "severity", "description"] if "description" in c.columns else ["name", "value"]
             out.append(ctx.small("Global counters since the last boot that show a pool ran out or a protection "
-                                 "kicked in:"))
+                                 "kicked in" + (" - summed over all DPs of the chassis" if ds.dps else "") + ":"))
             out.append(ctx.table(c[cols], [5.2, 2.4, 1.6, 8.0][:len(cols)], fmt={"value": lambda v: f"{v:,.0f}"}))
             pbp = c[c.name == "flow_dos_pbp_drop"]
             if not pbp.empty:
@@ -138,9 +139,9 @@ def build(ctx):
                     "up. Some drops during bursts are by design; a steadily growing number points to sessions or "
                     "sources that flood the firewall (check the zone protection logs)."))
                 ctx.find("notice", "DP resources", f"Packet buffer protection dropped {pbp.value.iloc[0]:,.0f} packets "
-                                                   "since boot.")
+                                                   "since boot.", whole=True)
             fail = c[c.name.str.contains("alloc_failure|alloc_fail")]
             if not fail.empty and fail.value.sum() >= 100:
                 ctx.find("notice", "DP resources", "Allocation failures since boot: " + ", ".join(
-                    f"{n} {v:,.0f}" for n, v in zip(fail.name, fail.value)) + ".")
+                    f"{n} {v:,.0f}" for n, v in zip(fail.name, fail.value)) + ".", whole=True)
     return out

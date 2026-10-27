@@ -223,7 +223,9 @@ def _anonymizer(ds, args, alias: str):
     if not getattr(args, "anonymize", False):
         return None
     from .anonymize import Anonymizer
-    return Anonymizer(ds.meta, args.alias or alias)
+    alias = args.alias or alias
+    others = [(d.meta, f"{alias}-node{n}") for n, d in ds.nodes.items()]  # cluster report: every node
+    return Anonymizer(ds.meta, alias, others)
 
 
 def _settings(cfg, args) -> dict:
@@ -231,7 +233,7 @@ def _settings(cfg, args) -> dict:
     th = args.spike_threshold if args.spike_threshold is not None else cfg.spike_threshold
     dur = C.parse_duration(args.spike_min_duration) if args.spike_min_duration else cfg.spike_min_duration
     return {"spike_threshold": th, "spike_min_minutes": max(1, round(dur / 60)),
-            "subinterfaces": bool(getattr(args, "subinterfaces", False)),
+            "subinterfaces": bool(getattr(args, "subinterfaces", False)), "dp": getattr(args, "dp", None),
             "capacity_dir": cfg.capacity_dir}
 
 
@@ -240,9 +242,12 @@ def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: s
     from .report import Ctx, build_pdf
     from .sections import PROFILES, SECTIONS
     if anon is not None:
-        anon.apply(ds)
+        for d in {id(x): x for x in [ds, *ds.nodes.values()]}.values():
+            anon.apply(d)
     outdir.mkdir(parents=True, exist_ok=True)
     ds.save(outdir)
+    for n, d in ds.nodes.items():  # cluster report: each node's own tables as well
+        d.save(outdir, sub=f"node{n}")
     names = sections.split(",") if sections else list(PROFILES[profile])
     if (settings or {}).get("subinterfaces") and "interfaces" not in names and not sections:
         names.insert(names.index("traffic") + 1 if "traffic" in names else len(names) - 1, "interfaces")
@@ -255,7 +260,10 @@ def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: s
     if anon is not None:
         ctx.find("info", "Anonymization", anon.summary())
     pdf = outdir / f"{ds.meta.get('hostname', 'device')}_{outdir.name}.pdf"
-    build_pdf(ctx, [SECTIONS[n] for n in names], pdf, title)
+    if ds.nodes:
+        _build_cluster_pdf(ctx, names, pdf, title)
+    else:
+        build_pdf(ctx, [SECTIONS[n] for n in names], pdf, title)
     if anon is not None:  # belt and braces: findings are built from anonymized data already
         ctx.findings = [(l, a, anon.text(t)) for l, a, t in ctx.findings]
     # findings may carry PDF markup (<b>, &nbsp;) - plain text for findings.txt/json and the terminal
@@ -266,6 +274,31 @@ def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: s
     (outdir / "findings.txt").write_text("".join(f"{f['level'].upper():8s} {f['area']}: {f['text']}\n" for f in findings))
     log.info("report: %s", pdf)
     return findings
+
+
+def _build_cluster_pdf(ctx, names: list, pdf: Path, title: str) -> None:
+    """Cluster report: whole-cluster sections, then one part per node (DP sections for its busiest DP and the
+    health of its chassis), then the remaining whole-cluster sections."""
+    from .report import build_pdf
+    from .sections import CLUSTER_PART, SECTIONS
+    ds = ctx.ds
+    if "cluster" not in names:
+        names.insert(names.index("coverage") + 1 if "coverage" in names else 0, "cluster")
+    head = [n for n in names if n in ("coverage", "cluster", "dp_compare")]
+    mods = [n for n in names if n in CLUSTER_PART]
+    tail = [n for n in names if n not in head and n not in mods]
+    lead = ds.meta.get("cluster_leader")
+
+    def select(key):
+        ctx.ds = ds.nodes[key] if key is not None else ds
+
+    parts = [dict(key=n, mods=[SECTIONS[m] for m in mods], label=f"node {n}", add_dp=True,
+                  title=f"Node {n}" + (" (leader)" if n == lead else ""),
+                  sub=f"{d.meta.get('hostname', '?')} - DP sections for its busiest DP, {d.meta.get('dp')}, and the "
+                      "health of this chassis")
+             for n, d in ds.nodes.items()] if mods else []
+    build_pdf(ctx, [SECTIONS[n] for n in head], pdf, title, parts=parts, select_dp=select,
+              tail=[SECTIONS[n] for n in tail])
 
 
 def _link_latest(parent: Path, target: Path) -> None:
@@ -307,8 +340,15 @@ def cmd_tsf(cfg, args) -> int:
     from . import dataset
     from .bundle import Bundle
     warnings.simplefilter("ignore", FutureWarning)
-    bundle = Bundle.open(args.bundle, cfg.data_dir / "bundles")
-    ds = dataset.build(bundle)
+    if len(args.bundle) > 1:
+        return _cmd_tsf_cluster(cfg, args)
+    bundle = Bundle.open(args.bundle[0], cfg.data_dir / "bundles")
+    ds = dataset.build(bundle, dp=args.dp)
+    if args.all_dps and not ds.dps:
+        raise SystemExit("--all-dps: this firewall has a single dataplane - the report covers it already")
+    if args.all_dps:
+        print(f"  NOTE     --all-dps: a separate document for all {len(ds.dps)} DPs follows the report - "
+              f"some {len(ds.dps) * 8} pages, this takes a few minutes.", flush=True)
     host = ds.meta.get("hostname", "unknown")
     anon = _anonymizer(ds, args, "firewall")
     if anon:
@@ -316,11 +356,70 @@ def cmd_tsf(cfg, args) -> int:
         out = (args.out or cfg.report_dir) / anon.alias / f"tsf_{anon.bundle_name(bundle.name, when)}_anon"
     else:
         out = (args.out or cfg.report_dir) / host / f"tsf_{bundle.name}"
+    settings = _settings(cfg, args)
     findings = _write_report(ds, out, args.profile, args.sections, "Dataplane & CPU load analysis (tech support file)",
-                             anon, _settings(cfg, args))
+                             anon, settings)
+    for f in findings:
+        print(f"  {f['level'].upper():8s} {f['area']}: {f['text']}")
+    if args.all_dps:
+        pdf = _write_all_dps(ds, out, anon, settings)
+        print(f"  all DPs: {pdf} ({pdf.stat().st_size / 1e6:.0f} MB)")
+    return 0
+
+
+def _cmd_tsf_cluster(cfg, args) -> int:
+    """'tsf A.tgz B.tgz': one report for all nodes of an NGFW cluster."""
+    from . import dataset
+    from .bundle import Bundle
+    if args.dp or args.all_dps:
+        raise SystemExit("--dp / --all-dps work on one TSF - run them per node")
+    bundles = [Bundle.open(b, cfg.data_dir / "bundles") for b in args.bundle]
+    ds = dataset.build_cluster(bundles)
+    anon = _anonymizer(ds, args, "firewall")
+    when = ds.meta.get("tsf_time") or datetime.now()
+    if anon:
+        out = (args.out or cfg.report_dir) / anon.alias / f"tsf_cluster_{when:%Y%m%d_%H%M}_anon"
+    else:
+        out = (args.out or cfg.report_dir) / ds.meta.get("hostname", "cluster") / f"tsf_cluster_{when:%Y%m%d_%H%M}"
+    findings = _write_report(ds, out, args.profile, args.sections,
+                             "Dataplane & CPU load analysis - NGFW cluster (tech support files)", anon, _settings(cfg, args))
     for f in findings:
         print(f"  {f['level'].upper():8s} {f['area']}: {f['text']}")
     return 0
+
+
+def _write_all_dps(ds, outdir: Path, anon, settings: dict) -> Path:
+    """Separate PDF for chassis models: the DP comparison, then the DP sections once per DP (one part each).
+    Each DP's tables are saved under data/dp_<name>/."""
+    from . import dataset
+    from .report import Ctx, build_pdf
+    from .sections import ALL_DPS, SECTIONS
+    keep = ds.meta.get("dp")
+    ctx = Ctx(ds=ds, outdir=outdir / "all_dps", settings={**settings, "all_dps_doc": True,
+                                                         "report_kind": settings.get("report_kind", "standard")})
+
+    def select(name):
+        name = name or keep  # None: back to the DP of the main report
+        dataset.select_dp(ds, name)
+        if anon is not None:
+            for k in dataset.DP_TABLES:
+                if k in ds.t:
+                    ds.t[k] = anon.frame(ds.t[k])
+        ds.save(outdir, only=dataset.DP_TABLES, sub=f"dp_{name}")
+        log.info("all DPs: %s", name)
+
+    pdf = outdir / f"{ds.meta.get('hostname', 'device')}_{outdir.name}_all-dps.pdf"
+    build_pdf(ctx, [SECTIONS["dp_compare"]], pdf, "Dataplane & CPU load analysis - all dataplanes",
+              parts=[dict(key=n, mods=[SECTIONS[s] for s in ALL_DPS], title=f"DP {n}", sub=_dp_card(ds, n), label=n)
+                     for n in ds.dps], select_dp=select, tail=[SECTIONS["method"]])
+    return pdf
+
+
+def _dp_card(ds, name: str) -> str:
+    """'s3dp0' -> 'PA-7500-DPC-A in slot 3, dataplane 0'."""
+    m = re.match(r"s(\d+)dp(\d+)", name)
+    card = (ds.meta.get("slot_cards") or {}).get(int(m.group(1)), "") if m else ""
+    return f"{card} in slot {m.group(1)}, dataplane {m.group(2)}" if card else ""
 
 
 def cmd_prune(cfg, args) -> int:
@@ -534,8 +633,14 @@ def main(argv=None) -> int:
         p.add_argument("--days", type=float, help="time window (default: report_days; 0 = everything)")
         report_args(p)
     p = sub.add_parser("tsf", help="analyse a tech support file (.tgz or extracted directory)")
-    p.add_argument("bundle", type=Path, help="techsupport .tgz or extracted directory")
+    # several TSFs = the nodes of an NGFW cluster (PA-7500): not advertised, see dataset.build_cluster
+    p.add_argument("bundle", type=Path, nargs="+", help="techsupport .tgz or extracted directory")
     report_args(p)
+    # chassis models (PA-7000/7500) only - working but deliberately left out of the help:
+    # --dp NAME: the DP the DP sections show (default: the busiest); --all-dps: separate PDF with the DP sections
+    # for every DP (about 8 pages per DP)
+    p.add_argument("--dp", metavar="NAME", help=argparse.SUPPRESS)
+    p.add_argument("--all-dps", action="store_true", help=argparse.SUPPRESS)
     if live:
         p = sub.add_parser("prune", help="delete samples/logs/reports older than the retention settings")
         p.add_argument("-n", "--dry-run", action="store_true")

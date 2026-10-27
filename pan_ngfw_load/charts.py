@@ -186,6 +186,14 @@ def legend_below(ax, ncol=4, y=-0.16, handlelength=1.2):
               handlelength=handlelength, columnspacing=1.2)
 
 
+def human_bytes(v: float) -> str:
+    """5204941e9 -> '5.2 PB' (decimal units, like interface speeds)."""
+    for div, suf in ((1e15, "PB"), (1e12, "TB"), (1e9, "GB"), (1e6, "MB"), (1e3, "kB")):
+        if abs(v) >= div:
+            return f"{v / div:.1f} {suf}"
+    return f"{v:.0f} B"
+
+
 def human(v: float) -> str:
     """12345 -> '12.3 k', 6232404 -> '6.2 M'."""
     for div, suf in ((1e12, " T"), (1e9, " G"), (1e6, " M"), (1e3, " k")):

@@ -6,6 +6,7 @@ be re-used (Excel, ad-hoc pandas, later comparisons between bundles).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,11 +15,17 @@ import numpy as np
 import pandas as pd
 
 from . import knowledge as K
-from .bundle import Bundle
+from .bundle import Bundle, _dp_key
 from .parsers import monitor, powperf, resmon, sar, simple
-from .parsers.cli import CliDump, parse_clock, parse_kv, parse_uptime
+from .parsers.cli import CliDump, parse_clock, parse_kv, parse_uptime, split_dp
 
 WINDOW_NAMES = {1: "second", 60: "minute", 3600: "hour", 86400: "day", 604800: "week"}
+
+# Tables and meta keys that belong to one dataplane. On chassis models (several DPs) they hold the DP
+# chosen with select_dp(); everything else covers the whole firewall.
+DP_TABLES = ("rm_cpu", "rm_util", "rm_groups", "pow_boot", "pow_core", "pow_status", "dpm_session", "dpm_groups15s",
+             "dpm_counters", "dpm_pow", "dpm_minute", "dpm_util", "dp_pow_interval", "dp_counter_rates")
+DP_META = ("dp_cores", "dp_core_count", "dp")
 
 
 @dataclass
@@ -28,6 +35,24 @@ class Dataset:
     meta: dict = field(default_factory=dict)
     t: dict[str, pd.DataFrame] = field(default_factory=dict)  # all tables
     notes: list[str] = field(default_factory=list)  # parser caveats for the report
+    dp_cli: dict = field(default_factory=dict)  # per DP (None = single-DP model): raw CLI texts of DP commands
+    _dpm: dict = field(default_factory=dict)  # per DP: parsed dp-monitor tables (cache)
+    nodes: dict = field(default_factory=dict)  # cluster report: node id -> that node's own Dataset
+
+    @property
+    def non_leader(self) -> bool:
+        """TSF of an NGFW cluster node that is not the leader: management, routing (BGP ...) and LACP run on the
+        leader, so this node's view of them is not the cluster's."""
+        if self.nodes or not self.has("cluster"):
+            return False
+        me = self["cluster"][self["cluster"].this]
+        return not me.empty and me.leader.iloc[0] != "yes"
+
+    @property
+    def dps(self) -> list[str]:
+        """DP names on chassis models ('s3dp0', ...), [] on single-DP models."""
+        names = {k for k in self.dp_cli if k} | set(self.bundle.dp_logs if self.bundle else ())
+        return sorted(names, key=_dp_key)
 
     def __getitem__(self, k: str) -> pd.DataFrame:
         return self.t.get(k, pd.DataFrame())
@@ -35,23 +60,186 @@ class Dataset:
     def has(self, k: str) -> bool:
         return k in self.t and not self.t[k].empty
 
-    def save(self, outdir: Path) -> None:
-        d = outdir / "data"
+    def save(self, outdir: Path, only: tuple | None = None, sub: str = "") -> None:
+        d = outdir / "data" / sub
         d.mkdir(parents=True, exist_ok=True)
         for k, df in self.t.items():
+            if only is not None and k not in only:
+                continue
             if not df.empty:
                 df.to_csv(d / f"{k}.csv", index=False)
-        pd.Series(self.meta, dtype=object).to_csv(d / "_meta.csv", header=["value"])
+        if only is None:
+            pd.Series(self.meta, dtype=object).to_csv(d / "_meta.csv", header=["value"])
 
 
-def build(bundle: Bundle) -> Dataset:
+def build(bundle: Bundle, dp: str | None = None) -> Dataset:
+    """dp: on chassis models the DP whose details the DP sections show (default: the busiest)."""
     ds = Dataset(bundle=bundle)
     _from_cli(ds)
-    _from_dp_monitor(ds)
+    if ds.dps:
+        if dp is not None and dp not in ds.dps:
+            raise SystemExit(f"unknown DP '{dp}' - this firewall has: {', '.join(ds.dps)}")
+        _dp_compare(ds)
+        if dp is None and ds.has("dp_compare"):
+            dp = ds["dp_compare"].sort_values("mean", ascending=False).dp.iloc[0]
+        select_dp(ds, dp or ds.dps[0])
+    else:
+        if dp is not None:
+            raise SystemExit("--dp: this firewall has a single dataplane")
+        select_dp(ds, None)
     _from_mp_monitor(ds)
     _from_sar(ds)
     _coverage(ds)
     return ds
+
+
+def build_cluster(bundles: list[Bundle]) -> Dataset:
+    """NGFW cluster (PA-7500): one Dataset from the TSFs of both nodes.
+
+    Each node counts only what its own dataplanes processed (inferred from the counters: received and sent bytes
+    balance only over both nodes), so counters are added up. Management, configuration, routing and logs run on the
+    leader - its Dataset is the base. The nodes' own Datasets stay in ds.nodes for the per-node parts."""
+    dss = [build(b) for b in bundles]
+    ids = []
+    for d in dss:
+        cl = d.meta.get("cluster") or {}
+        if not d.has("cluster") or not cl.get("node_id"):
+            raise SystemExit(f"{d.bundle.name}: not a node of an NGFW cluster - a cluster report needs the TSFs of "
+                             "both nodes of one cluster")
+        ids.append((cl.get("cluster_id"), cl["node_id"]))
+    if len({c for c, _ in ids}) != 1 or len({n for _, n in ids}) != len(ids):
+        raise SystemExit("the TSFs are not from the nodes of one cluster (cluster ID / node ID: "
+                         + ", ".join(f"{c}/{n}" for c, n in ids) + ")")
+    nodes = {n: d for (_c, n), d in zip(ids, dss)}
+    leaders = [n for n, d in nodes.items() if (d["cluster"].this & (d["cluster"].leader == "yes")).any()]
+    lead = leaders[0] if len(leaders) == 1 else min(nodes)
+    ld = nodes[lead]  # the base is a copy: the nodes keep their own values for the per-node views
+    base = Dataset(bundle=ld.bundle, source=ld.source, meta=dict(ld.meta), t=dict(ld.t), notes=list(ld.notes),
+                   dp_cli=ld.dp_cli, _dpm=ld._dpm)
+    base.nodes = dict(sorted(nodes.items()))
+    if len(leaders) != 1:
+        base.notes.append("The TSFs do not agree on the cluster leader - node %s is used as the base." % lead)
+    times = [d.meta.get("tsf_time") for d in nodes.values()]
+    if all(times) and max(times) - min(times) > timedelta(hours=2):
+        base.notes.append(f"The TSFs of the nodes were taken {(max(times) - min(times)).total_seconds() / 3600:.0f} "
+                          "hours apart - values 'now' are from different times.")
+    for n, d in [*nodes.items(), (lead, base)]:
+        d.meta["node"] = n
+        d.meta["dp_label"] = f"node {n} {d.meta.get('dp')}"
+    base.meta.update(cluster_nodes=sorted(nodes), cluster_leader=lead)
+
+    # counters are each node's share - add them up
+    def summed(key, by):
+        parts = [d[key].assign(node=n) for n, d in nodes.items() if d.has(key)]
+        if not parts:
+            return None, None
+        allp = pd.concat(parts, ignore_index=True)
+        by = [c for c in by if c in allp.columns]
+        num = [c for c in allp.columns if c not in by + ["node"] and pd.api.types.is_numeric_dtype(allp[c])]
+        other = [c for c in allp.columns if c not in num + by + ["node"]]
+        tot = allp.groupby(by, sort=False).agg({**{c: "sum" for c in num}, **{c: "first" for c in other}}).reset_index()
+        return tot, allp
+    for key, by in (("if_counters", ["interface"]), ("counters_boot", ["name"]), ("apps", ["vsys", "app"])):
+        tot, allp = summed(key, by)
+        if tot is not None:
+            base.t[key] = tot[[c for c in allp.columns if c != "node"]]
+            if key == "if_counters":
+                base.t["if_counters_nodes"] = allp
+    si = [d.meta.get("session_info") or {} for d in nodes.values()]
+    if all(si):
+        tot = {k: sum(x.get(k) or 0 for x in si) for k in si[0] if isinstance(si[0][k], (int, float)) and k != "session_util_pct"}
+        tot["session_util_pct"] = tot["sessions_allocated"] / tot["sessions_supported"] * 100 if tot.get("sessions_supported") else 0
+        base.meta["session_info"] = {**si[0], **tot}
+    if all(d.has("sessions_now") for d in nodes.values()):
+        base.t["sessions_now"] = pd.concat([d["sessions_now"] for d in nodes.values()], ignore_index=True)
+    # all DPs of both nodes side by side, named like the interfaces ('n1:s7dp0')
+    for key in ("dp_compare", "dp_compare_5min"):
+        if all(d.has(key) for d in nodes.values()):
+            base.t[key] = pd.concat([d[key].assign(dp=f"n{n}:" + d[key].dp) for n, d in nodes.items()], ignore_index=True)
+    base.meta["dp_shown"] = [f"n{n}:{d.meta.get('dp')}" for n, d in nodes.items()]
+    return base
+
+
+def select_dp(ds: Dataset, name: str | None) -> None:
+    """Load one DP's resource-monitor, pow performance/status and dp-monitor history into the DP tables."""
+    for k in DP_TABLES:
+        ds.t.pop(k, None)
+    for k in DP_META:
+        ds.meta.pop(k, None)
+    ds.meta["dp"] = name
+    texts = ds.dp_cli.get(name, {})
+    now = ds.meta.get("tsf_time")
+    if texts.get("rm"):
+        rm = resmon.parse(texts["rm"])
+        ds.meta["dp_cores"] = resmon.dp_cores(rm)
+        _rm_tables(ds, rm, now)
+    if texts.get("pp"):
+        df = powperf.parse(texts["pp"])
+        ds.t["pow_boot"] = _enrich_pow(df[df.core == -1].drop(columns="core"))
+    for txt in texts.get("pp_core", []):  # per-core tables (may be split over several commands)
+        df = powperf.parse(txt)
+        if not df.empty:
+            ds.t["pow_core"] = pd.concat([ds["pow_core"], _enrich_pow(df)], ignore_index=True)
+    if texts.get("pow_status"):
+        ds.t["pow_status"] = simple.pow_status(texts["pow_status"])
+    t = _dp_monitor_tables(ds, name)
+    if t is None:
+        ds.meta["dp_core_count"] = len(ds.meta.get("dp_cores") or []) or 1
+        return
+    ds.t.update(t)
+    ds.meta["dp_core_count"] = len(ds.meta.get("dp_cores") or []) or max(1, t["dpm_minute"].core.nunique() - 1)
+    _derive_pow(ds)
+    _derive_rates(ds)
+    if ds.has("coverage"):  # coverage depends on the DP as well
+        _coverage(ds)
+
+
+def _dp_monitor_tables(ds: Dataset, name: str | None) -> dict | None:
+    if name not in ds._dpm:
+        files = ds.bundle.dp_logs.get(name, []) if name else ds.bundle.dp_monitor
+        ds._dpm[name] = monitor.dp_monitor(files) if files else None
+        if not files and name is None:
+            ds.notes.append("No dp-monitor.log* files found.")
+    return ds._dpm[name]
+
+
+def _dp_compare(ds: Dataset) -> None:
+    """Chassis: load of every DP side by side (dp_compare), from its dp-monitor history (per minute) or,
+    without one, from the hourly resource-monitor window."""
+    rows, minutes = [], []
+    cards = ds.meta.get("slot_cards") or {}
+    for name in ds.dps:
+        texts = ds.dp_cli.get(name, {})
+        card = cards.get(int(re.match(r"s(\d+)", name).group(1)), "")
+        rm = resmon.parse(texts["rm"]) if texts.get("rm") else None
+        cores = resmon.dp_cores(rm) if rm else []
+        t = _dp_monitor_tables(ds, name)
+        src, series, per_core = None, None, None
+        if t is not None and not t["dpm_minute"].empty:
+            m = t["dpm_minute"]
+            m = m[m.core.isin(cores)] if cores else m
+            wide = m.pivot_table(index="ts", columns="core", values="avg")
+            series, per_core, src = wide.mean(axis=1), wide.mean(), "dp-monitor (per minute)"
+            peak = m["max"].max()
+            five = series.resample("5min").mean().dropna()
+            minutes += [(ts, name, v) for ts, v in five.items()]
+        elif rm and rm["windows"].get(3600, {}).get("cpu", {}).get("avg"):
+            w = rm["windows"][3600]["cpu"]
+            wide = pd.DataFrame(w["avg"], columns=w["cores"])[cores or w["cores"]]
+            series, per_core, src = wide.mean(axis=1), wide.mean(), "resource-monitor (per hour)"
+            peak = pd.DataFrame(w["max"], columns=w["cores"])[cores or w["cores"]].max().max() if w.get("max") else np.nan
+        if series is None or series.dropna().empty:
+            rows.append(dict(dp=name, card=card, cores=len(cores) or np.nan, mean=np.nan, p95=np.nan, max=np.nan,
+                             core_peak=np.nan, busiest_core="", hours=np.nan, source="no data"))
+            continue
+        series = series.dropna()
+        hours = ((series.index.max() - series.index.min()).total_seconds() / 3600
+                 if isinstance(series.index, pd.DatetimeIndex) else len(series))
+        rows.append(dict(dp=name, card=card, cores=len(cores) or len(per_core), mean=series.mean(), p95=series.quantile(0.95),
+                         max=series.max(), core_peak=peak, busiest_core=f"{per_core.idxmax()} ({per_core.max():.0f}%)",
+                         hours=hours, source=src))
+    ds.t["dp_compare"] = pd.DataFrame(rows)
+    ds.t["dp_compare_5min"] = pd.DataFrame(minutes, columns=["ts", "dp", "avg"])  # mean of the DP's cores
 
 
 def build_live(coll: Path, since: datetime | None = None) -> Dataset:
@@ -129,21 +317,24 @@ def _from_cli(ds: Dataset) -> None:
     from .anonymize import interface_ips
     ds.meta["device_ips"] = interface_ips(d.get("show interface all") or "")
 
-    rm_text = d.get("show running resource-monitor")
-    if rm_text:
-        rm = resmon.parse(rm_text)
-        ds.meta["dp_cores"] = resmon.dp_cores(rm)
-        _rm_tables(ds, rm, now)
-
-    pp = d.get("debug dataplane pow performance all")
-    if pp:
-        df = powperf.parse(pp)
-        ds.t["pow_boot"] = _enrich_pow(df[df.core == -1].drop(columns="core"))
-    for cmd, _ in d.sections:  # per-core tables (may be split over several commands)
-        if cmd.startswith("debug dataplane pow performance all core"):
-            df = powperf.parse(d.get(cmd))
-            if not df.empty:
-                ds.t["pow_core"] = pd.concat([ds["pow_core"], _enrich_pow(df)], ignore_index=True)
+    cards = {}  # chassis: card model per slot
+    for line in (d.get("show chassis inventory") or "").splitlines():
+        if (m := re.match(r"^(\d+)\s+(PA-\S+)", line)):
+            cards[int(m.group(1))] = m.group(2)
+    if cards:
+        ds.meta["slot_cards"] = cards
+    # dataplane commands: chassis models print one block per DP - kept per DP, loaded by select_dp()
+    for dp, txt in split_dp(d.get("show running resource-monitor")).items():
+        ds.dp_cli.setdefault(dp, {})["rm"] = txt
+    for dp, txt in split_dp(d.get("debug dataplane pow performance all")).items():
+        ds.dp_cli.setdefault(dp, {})["pp"] = txt
+    for cmd, out in d.sections:  # per-core tables (may be split over several commands)
+        if " ".join(cmd.split()).startswith("debug dataplane pow performance all core"):
+            for dp, txt in split_dp(out).items():
+                ds.dp_cli.setdefault(dp, {}).setdefault("pp_core", []).append(txt)
+    # repeated in a TSF; the last one is the newest
+    for dp, txt in split_dp(d.get("debug dataplane pow status", -1)).items():
+        ds.dp_cli.setdefault(dp, {})["pow_status"] = txt
 
     if (txt := d.get("show running application statistics")):
         ds.t["apps"] = simple.app_statistics(txt)
@@ -151,11 +342,15 @@ def _from_cli(ds: Dataset) -> None:
         ds.t["sessions_now"] = simple.session_list(txt)
     if (txt := d.get("show session info")):
         ds.meta["session_info"] = simple.session_info(txt)
+    if (txt := d.get("show cluster all")) and "not enabled" not in txt:
+        ds.meta["cluster"] = simple.cluster_settings(txt)
     if (txt := d.get("show counter global")):
         _el, gc = simple.global_counters(txt)
         ds.t["counters_boot"] = gc
     for key, cmd, fn in (("ha", "show high-availability all", simple.ha_status),
                          ("environment", "show system environmentals", simple.environmentals),
+                         ("cluster", "show cluster all", simple.cluster_status),
+                         ("chassis", "show chassis status", simple.chassis_status),
                          ("disk", "show system disk-space", simple.disk_space),
                          ("software", "show system software status", simple.software_status),
                          ("if_hw", "show interface all", simple.interface_hw),
@@ -166,8 +361,6 @@ def _from_cli(ds: Dataset) -> None:
     if ds.bundle.crashinfo:
         ds.t["crashes"] = simple.crashinfo(ds.bundle.crashinfo)
     _scale(ds, d)
-    if (txt := d.get("debug dataplane pow status", -1)):  # repeated in a TSF; the last one is the newest
-        ds.t["pow_status"] = simple.pow_status(txt)
     if (txt := d.get("show counter interface all")):
         ifc = simple.interface_counters(txt)
         cfg_xml = simple.config_file(ds.bundle.root)
@@ -203,8 +396,13 @@ def _scale(ds: Dataset, d) -> None:
     for metric, cmd in (("security_rules", "show running security-policy"), ("nat_rules", "show running nat-policy"),
                         ("decryption_rules", "show running decryption-policy"), ("pbf_rules", "show running pbf-policy")):
         txt = d.get(cmd)
-        if txt is not None:
-            rows.append((metric, simple.running_rules(txt), None, "rules in effect"))
+        n = simple.running_rules(txt) if txt is not None else None
+        # output cut short in the TSF (seen on a PA-7500: only rule 1 per DP) - disabled rules may legitimately
+        # make the running count lower than the configuration, so only an almost empty output counts as cut short
+        if n is not None and metric in cfg and n <= 1 and cfg[metric] >= 10:
+            rows.append((metric, cfg[metric], None, "configuration (running output incomplete)"))
+        elif n is not None:
+            rows.append((metric, n, None, "rules in effect"))
         elif metric in cfg:
             rows.append((metric, cfg[metric], None, "configuration"))
     for metric in ("app_override_rules", "dos_rules", "qos_rules", "address_objects", "address_groups",
@@ -234,28 +432,17 @@ def _scale(ds: Dataset, d) -> None:
 
 
 def _enrich_pow(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
+    df = df[~((df.kind == "group") & df.name.isin(K.NOT_CPU_GROUPS))].copy()  # waiting time, not CPU
     df["stage"] = np.where(df.kind == "group", df.name.map(K.group_stage), None)
     df["feature"] = np.where(df.kind == "func", df.name.map(lambda n: K.func_feature(n) or "(latency, not CPU)"), None)
     return df
 
 
-def _from_dp_monitor(ds: Dataset) -> None:
-    if not ds.bundle.dp_monitor:
-        ds.notes.append("No dp-monitor.log* files found.")
-        return
-    t = monitor.dp_monitor(ds.bundle.dp_monitor)
-    ds.t.update(t)
-    ncores = len(ds.meta.get("dp_cores") or []) or max(1, t["dpm_minute"].core.nunique() - 1)
-    ds.meta["dp_core_count"] = ncores
-
-    _derive_pow(ds)
-    _derive_rates(ds)
-
-
 def _derive_pow(ds: Dataset) -> None:
     """pow performance: accumulated -> per-interval CPU share of total DP capacity."""
     pw = ds["dpm_pow"]
+    if not pw.empty:
+        pw = pw[~((pw.kind == "group") & pw.name.isin(K.NOT_CPU_GROUPS))]
     ncores = ds.meta.get("dp_core_count") or 1
     if pw.empty:
         return
@@ -300,7 +487,7 @@ def _from_sar(ds: Dataset) -> None:
         cpu = cpu[cpu.CPU != "all"].copy()
         cpu["core"] = cpu.CPU.astype(float).astype(int)
         cpu["busy"] = 100 - cpu["%idle"]
-        dp = set(ds.meta.get("dp_cores") or [])
+        dp = set() if ds.dps else set(ds.meta.get("dp_cores") or [])  # chassis: the MP is a card of its own
         cpu["role"] = np.where(cpu.core.isin(dp), "DP worker (busy-poll, ignore)", "MP")
         ds.t["sar_cpu"] = cpu.drop(columns="CPU")
     for key, name in (("runq-sz_plist-sz", "sar_load"), ("kbmemfree_kbavail", "sar_mem"), ("IFACE_rxpck/s", "sar_net")):

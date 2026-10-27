@@ -6,6 +6,7 @@ import pandas as pd
 from .. import charts as C
 
 TITLE = "Sessions"
+DP_SCOPED = "partly"  # chassis: rates and load over time come from one DP (see dataset.select_dp)
 
 PROTO = {6: "TCP", 17: "UDP", 1: "ICMP", 58: "ICMPv6", 50: "ESP", 47: "GRE"}
 
@@ -52,7 +53,7 @@ def build(ctx):
         if si.get("session_util_pct") is not None:
             lvl = "warning" if si["session_util_pct"] >= 90 else "notice" if si["session_util_pct"] >= 70 else "info"
             ctx.find(lvl, "Sessions", f"Session table {si['session_util_pct']:.0f}% full "
-                                      f"({si.get('sessions_allocated', 0):,.0f} of {si.get('sessions_supported', 0):,.0f}).")
+                                      f"({si.get('sessions_allocated', 0):,.0f} of {si.get('sessions_supported', 0):,.0f}).", whole=True)
 
     # --- over time ----------------------------------------------------------------------
     if has_ts:

@@ -16,6 +16,7 @@ from .. import charts as C
 from .. import knowledge as K
 
 TITLE = "Core spikes - single DP cores above the rest"
+DP_SCOPED = True  # chassis models: covers one DP (see dataset.select_dp)
 
 GAP_MIN = 5          # minutes below the threshold that do not end an episode
 SIMILAR_LOAD = 10    # baseline intervals: median core load within +-this many points of the spike intervals
