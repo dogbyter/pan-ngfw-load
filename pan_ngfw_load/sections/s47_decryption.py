@@ -469,9 +469,30 @@ def _episodes(ctx, gauge: pd.DataFrame, lim_sess) -> list:
         if len(lf):
             causes.append(f"decryption log: {lf.reason.value_counts().index[0]} "
                           f"({lf.reason.value_counts().iloc[0]:,} of {len(lf):,} logged failures)")
-        rows.append((start, end, end - start, what, f_peak, "; ".join(causes) or "-"))
+        rows.append((start, end, end - start, what, f_peak, "; ".join(causes) or "-",
+                     # for the conclusion: which kinds of failure, how many, commit before / jump in sessions
+                     sorted(sig), float(tot.sum()), bool(len(cm)), bool(jump), p_in, ld, tot.to_dict()))
 
-    tab = pd.DataFrame(rows, columns=["from", "to", "duration", "what failed", "decrypted sessions", "possible cause"])
+    tab = pd.DataFrame(rows, columns=["from", "to", "duration", "what failed", "decrypted sessions", "possible cause",
+                                      "_kinds", "_failures", "_commit", "_jump", "_pps", "_load", "_counts"])
+    # how many periods would have a commit in [start - COMMIT_BEFORE, end] by chance: for each period, the share of
+    # start times in the window for which a period of that length would contain a commit
+    t0, t1 = cnt.index.min(), cnt.index.max()
+    grid = pd.date_range(t0, t1, freq="1min") if t1 > t0 else pd.DatetimeIndex([])
+    work = all(WORK_HOURS[0] <= t.hour < WORK_HOURS[1] for t in tab["from"])
+    if work:  # commits and periods both happen in working hours - compare like with like
+        grid = grid[(grid.hour >= WORK_HOURS[0]) & (grid.hour < WORK_HOURS[1])]
+    ds.meta["tls_commit_work_hours"] = work
+    cts = com.ts[(com.ts >= t0 - COMMIT_BEFORE) & (com.ts <= t1 + pd.Timedelta(days=1))].sort_values().values
+    exp = 0.0
+    for dur in tab.duration:
+        if len(grid) and len(cts):
+            lo = np.searchsorted(cts, (grid - COMMIT_BEFORE).values, side="left")
+            hi = np.searchsorted(cts, (grid + dur).values, side="right")
+            exp += float((hi > lo).mean())
+    ds.meta["tls_commit_expected"] = exp
+    ds.meta["tls_commits_in_window"] = int(((com.ts >= t0) & (com.ts <= t1)).sum())
+    ds.meta["tls_window"] = (t0, t1)
     dur = lambda d: (f"{d.total_seconds() / 3600:.1f} h" if d >= pd.Timedelta(hours=2)
                      else f"{d.total_seconds() / 60:.0f} min")
     out = [ctx.h2("Episodes"),
@@ -482,7 +503,7 @@ def _episodes(ctx, gauge: pd.DataFrame, lim_sess) -> list:
                      "sessions' is the peak in the episode"
                      + (f" - usually {usual_fwd:,.0f}" if pd.notna(usual_fwd) else "") + ". The possible cause is "
                      "derived from what changed at the same time - a hint, not a proof."),
-           ctx.table(tab, [1.9, 1.3, 1.4, 5.0, 1.8, 5.6],
+           ctx.table(tab[tab.columns[:6]], [1.9, 1.3, 1.4, 5.0, 1.8, 5.6],
                      fmt={"from": lambda t: f"{t:%d.%m. %H:%M}", "to": lambda t: f"{t:%H:%M}", "duration": dur,
                           "decrypted sessions": lambda v: "-" if pd.isna(v) else f"{v:,.0f}"}, max_rows=30)]
     if len(tab) > 30:
@@ -490,10 +511,131 @@ def _episodes(ctx, gauge: pd.DataFrame, lim_sess) -> list:
     ds.t["tls_episodes"] = tab
     try:  # the data files are written before the sections run - add this one
         (ctx.outdir / "data").mkdir(parents=True, exist_ok=True)
-        tab.to_csv(ctx.outdir / "data" / "tls_episodes.csv", index=False)
+        tab[tab.columns[:6]].to_csv(ctx.outdir / "data" / "tls_episodes.csv", index=False)
     except OSError:
         pass
     return out
+
+
+# kinds of problem periods: counters, heading, what to do (tls13: only when not part of a resource shortage)
+PERIOD_KINDS = [
+    ("resources", {"proxy_ssl_no_resource", "proxy_tls13_downgrade_no_ossl_resource"}, "Proxy out of resources",
+     "find out what changed before these periods (decryption rules, amount of decrypted traffic) and check the proxy "
+     "memory ('show system setting ssl-decrypt memory') at such a time; if it repeats, open a case with Palo Alto "
+     "Networks support"),
+    ("queue", {"proxy_tunnel_taildrop"}, "Proxy send queue full",
+     "the queue also carries sessions the proxy only checks (no-decrypt rules, client hello inspection), so it can "
+     "overflow without much decryption; retransmissions cover the drops at the cost of latency - if they grow or "
+     "users notice delays, open a case with Palo Alto Networks support"),
+    ("tls13", {"ssl_tls13_connection_error", "proxy_tls13_server_timedout"}, "TLS 1.3 errors",
+     "check which servers fail in the decryption log; servers that break TLS 1.3 proxying belong on the exclusion "
+     "list"),
+    ("certs", {"proxy_ssl_untrusted_cert", "proxy_ssl_expired_cert", "proxy_ssl_invalid_cert"}, "Server certificates",
+     "decide in the decryption profile whether sessions with such certificates are blocked"),
+    ("unsupported", {"proxy_ssl_unsupported", "proxy_ssl_unsupported_cipher", "proxy_client_hello_failed",
+                     "ssl_ossl_cipher_set_fail"}, "Unsupported or unreadable TLS",
+     "old or non-standard clients and servers - allow their versions and ciphers in the decryption profile or exclude "
+     "them"),
+    ("url", {"proxy_url_request_pkt_drop", "proxy_url_request_timeout"}, "URL category lookups",
+     "the proxy waited for URL categories from the cloud - check the firewall's connection to the URL filtering "
+     "cloud"),
+]
+WORK_HOURS = (6, 19)  # episodes starting in [06:00, 19:00) count as working hours
+
+
+def _periods(ctx, lim_sess) -> tuple[list, list]:
+    """Conclusion sub-section 'Problem periods': the episodes as a whole - per kind of problem when, how often, how
+    long, the worst one, what they have in common; whether commits explain them more often than chance would."""
+    ds = ctx.ds
+    if "tls_episodes" not in ds.t:
+        return [], []
+    ep = ds.t["tls_episodes"]
+    out = [ctx.h3("Problem periods")]
+    win = _window(ds)
+    if ep.empty:
+        out.append(ctx.p(f"No period in the {win} with clearly more TLS/SSL failures than usual."))
+        return out, []
+    days = sorted({t.date() for t in ep["from"]})
+    total = sum((d for d in ep.duration), pd.Timedelta(0))
+    fmt_d = lambda x: (f"{x.total_seconds() / 3600:.1f} h" if x >= pd.Timedelta(hours=2)
+                       else f"{x.total_seconds() / 60:.0f} min")
+    t0, t1 = ds.meta.get("tls_window", (None, None))
+    span = f" in {(t1 - t0).total_seconds() / 86400:.1f} days" if t0 is not None else ""
+    out.append(ctx.p(f"The {win} holds <b>{len(ep)} problem period{'s' if len(ep) != 1 else ''}</b>{span}, "
+                     f"{fmt_d(total)} in total, on {len(days)} day{'s' if len(days) != 1 else ''}."))
+    r = ds["dp_counter_rates"] if ds.has("dp_counter_rates") else pd.DataFrame(columns=["name", "rate"])
+    pps_usual = r[r.name == "pkt_recv"].rate.median() if len(r) else np.nan
+    todo = []
+    res_eps = {i for i, k in enumerate(ep._kinds) if set(k) & PERIOD_KINDS[0][1]}
+    for key, names, title, advice in PERIOD_KINDS:
+        idx = [i for i, k in enumerate(ep._kinds) if set(k) & names and not (key == "tls13" and i in res_eps)]
+        if not idx:
+            continue
+        e = ep.iloc[idx]
+        hours = [t.hour for t in e["from"]]
+        when = ("all during working hours" if all(WORK_HOURS[0] <= h < WORK_HOURS[1] for h in hours) else
+                "all outside working hours" if not any(WORK_HOURS[0] <= h < WORK_HOURS[1] for h in hours) else
+                "during the day and at night")
+        edays = sorted({t.date() for t in e["from"]})
+        own = e._counts.map(lambda c: sum(v for k, v in c.items() if k in names))
+        worst = e.loc[own.idxmax()]
+        detail = "; ".join(f"{FAIL[k]}: {v:,.0f}" for k, v in worst._counts.items() if k in names)
+        if len(e) == 1:
+            when = when.replace("all ", "")
+        txt = (f"<b>{title}:</b> {len(e)} period{'s' if len(e) != 1 else ''}"
+               + (f" on {len(edays)} days" if len(edays) > 1 else f" on {edays[0]:%d.%m.}") + f", {when}, "
+               + (f"{fmt_d(min(e.duration))} to {fmt_d(max(e.duration))} each, {own.sum():,.0f} in total"
+                  if len(e) > 1 else fmt_d(worst.duration))
+               + f"; the largest {worst['from']:%d.%m. %H:%M}-{worst.to:%H:%M} ({detail}).")
+        dec = e["decrypted sessions"]
+        if dec.notna().any():
+            low_lim = 0.05 * lim_sess if lim_sess else 100
+            n_low = int((dec < low_lim).sum())
+            if len(e) > 1 and n_low:
+                txt += (f" In {'all of them' if n_low == len(e) else f'{n_low} of the {len(e)}'} decryption itself was "
+                        f"low (under {low_lim:,.0f} decrypted sessions)"
+                        + (f"; the others reached up to {dec.max():,.0f}." if n_low < len(e) else "."))
+            else:
+                txt += f" Up to {dec.max():,.0f} decrypted sessions at the same time" + (
+                    f" ({dec.max() / lim_sess * 100:.0f}% of the limit)." if lim_sess else ".")
+        busy = (e._pps >= 1.5 * pps_usual).sum() if pd.notna(pps_usual) else 0
+        if busy and busy >= len(e) / 2:
+            txt += (f" {'All' if busy == len(e) else f'{busy} of {len(e)}'} fall into busy times (up to "
+                    f"{e._pps.max():,.0f} packets/s, usually {pps_usual:,.0f}).")
+        if e._load.max() >= 80:
+            txt += f" The dataplane was at up to {e._load.max():.0f}% load."
+        if len(edays) > 1 and len(e) >= 3:
+            txt += " It recurs - a pattern, not a one-off."
+        out.append(ctx.p("- " + txt))
+        todo.append((key, f"{title}: {advice}"))
+
+    worst = ep.loc[ep._failures.idxmax()]
+    out.append(ctx.p(f"<b>The heaviest period</b> was {worst['from']:%d.%m. %H:%M}-{worst.to:%H:%M} "
+                     f"({fmt_d(worst.duration)}): {worst['what failed']}. Possible cause: {worst['possible cause']}."))
+
+    com = ds["commits"] if ds.has("commits") else pd.DataFrame(columns=["ts", "kind"])
+    com = com[com.kind == "configuration"]
+    if len(com):
+        after = [bool(((com.ts >= a - COMMIT_BEFORE) & (com.ts <= b)).any()) for a, b in zip(ep["from"], ep.to)]
+        n_after, exp = sum(after), ds.meta.get("tls_commit_expected", 0.0)
+        txt = (f"<b>Configuration commits:</b> {n_after} of {len(ep)} periods had a configuration commit up to "
+               f"{COMMIT_BEFORE.total_seconds() / 60:.0f} minutes before or during them. With "
+               f"{ds.meta.get('tls_commits_in_window', len(com))} commits in the {win}, about {exp:.1f} would by "
+               "chance" + (" (counted for working hours only, since all periods fall into them)"
+                           if ds.meta.get("tls_commit_work_hours") else "") + ". ")
+        jump_after = [i for i, a in enumerate(after) if a and ep._jump.iloc[i]]
+        if n_after >= 2 and n_after >= 2 * max(exp, 0.5):
+            txt += "That is clearly more than chance - look at what those commits changed."
+            todo.append(("commits", "Configuration commits: compare what the commits right before the problem "
+                                    "periods changed - they line up more often than chance"))
+        elif jump_after:
+            txt += ("Overall that is not more than chance, but where the decrypted sessions jumped right after a "
+                    "commit (" + ", ".join(f"{ep['from'].iloc[i]:%d.%m. %H:%M}" for i in jump_after)
+                    + "), that commit is the likely trigger.")
+        else:
+            txt += "So commits don't explain these periods."
+        out.append(ctx.p(txt))
+    return out, todo
 
 
 def _conclusion(ctx, d: dict) -> list:
@@ -549,11 +691,13 @@ def _conclusion(ctx, d: dict) -> list:
             txt += (f" Sessions were at {peak / lim * 100:.0f}% of the limit" + (f" and the dataplane at {load:.0f}% "
                     "load" if pd.notna(load) else "") + " at that time, so neither the session limit nor the CPU "
                     "was the bottleneck - it points to another proxy resource (proxy memory, TLS 1.3 contexts).")
-            todo.append("find out what changed shortly before the resource errors (e.g. a new or wider decryption "
-                        "rule) and check the proxy memory ('show system setting ssl-decrypt memory') at a busy time; "
-                        "if it repeats, open a case with Palo Alto Networks support")
+            todo.append(("resources", "find out what changed shortly before the resource errors (e.g. a new or wider "
+                                      "decryption rule) and check the proxy memory ('show system setting ssl-decrypt "
+                                      "memory') at a busy time; if it repeats, open a case with Palo Alto Networks "
+                                      "support"))
         else:
-            todo.append("reduce the decrypted traffic or plan a larger model - the proxy runs out of resources")
+            todo.append(("resources", "reduce the decrypted traffic or plan a larger model - the proxy runs out of "
+                                      "resources"))
         pts.append(txt)
     td = val("proxy_tunnel_taildrop")
     if td >= TAILDROP_NOTICE:
@@ -592,8 +736,8 @@ def _conclusion(ctx, d: dict) -> list:
         pts.append("<b>Certificates:</b> " + ", ".join(f"{v:,.0f} {k.split('_')[2]}" for k, v in bad.items())
                    + " server certificates since boot. Whether such sessions are blocked depends on the decryption "
                      "profile - worth checking against your policy.")
-        todo.append("check the decryption profile: block sessions with untrusted, expired or invalid server "
-                    "certificates")
+        todo.append(("certs", "check the decryption profile: block sessions with untrusted, expired or invalid server "
+                              "certificates"))
     lf = _log_failures(ds)
     if len(lf):
         r = lf.reason.value_counts()
@@ -606,8 +750,9 @@ def _conclusion(ctx, d: dict) -> list:
                    f"({r.iloc[0] / len(lf) * 100:.0f}%)."
                    + "".join(f" {h[0].upper() + h[1:]} ({p:.0f}%)." for h, p in hints))
         if hints:
-            todo.append("go through the failures in 'From the decryption log': fix the decryption profile where versions "
-                        "or ciphers don't match, and exclude servers that reject the firewall's certificate")
+            todo.append(("log", "go through the failures in 'From the decryption log': fix the decryption profile where "
+                                "versions or ciphers don't match, and exclude servers that reject the firewall's "
+                                "certificate"))
     if ds.has("dp_pow_interval"):
         p = ds["dp_pow_interval"]
         cr = p[(p.kind == "func") & (p.feature == "Decryption & crypto")].groupby("ts").pct.sum()
@@ -630,7 +775,11 @@ def _conclusion(ctx, d: dict) -> list:
                               "it is close to its limits." if serious else ".")
                + share_txt)
     out = [ctx.h2("Conclusion"), ctx.p(f"<b>{verdict}</b>")] + [ctx.p("- " + t) for t in pts]
-    if todo:
+    per, per_todo = _periods(ctx, d["lim_sess"])
+    out += per
+    items = dict(todo)
+    items.update(per_todo)  # the period view replaces the general advice of the same kind
+    if items:
         out.append(ctx.p("<b>To check:</b>"))
-        out += [ctx.p(f"- {t[0].upper() + t[1:]}.") for t in todo]
+        out += [ctx.p(f"- {t[0].upper() + t[1:]}.") for t in items.values()]
     return out

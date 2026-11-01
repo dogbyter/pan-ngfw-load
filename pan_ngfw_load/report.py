@@ -37,6 +37,7 @@ STY: dict = {
     "subtitle": ParagraphStyle("st", parent=_ss["Normal"], fontSize=11, leading=15, textColor=INK2),
     "h1": ParagraphStyle("h1", parent=_ss["Heading1"], fontSize=15, leading=19, textColor=INK, spaceBefore=4, spaceAfter=6),
     "h2": ParagraphStyle("h2", parent=_ss["Heading2"], fontSize=11.5, leading=15, textColor=INK, spaceBefore=8, spaceAfter=4),
+    "h3": ParagraphStyle("h3", parent=_ss["Heading3"], fontSize=10, leading=13, textColor=INK, spaceBefore=6, spaceAfter=3),
     "part": ParagraphStyle("part", parent=_ss["Title"], fontSize=20, leading=24, alignment=TA_LEFT, textColor=INK,
                            spaceBefore=120, spaceAfter=10),
     "body": ParagraphStyle("b", parent=_ss["BodyText"], fontSize=9, leading=12.5, textColor=INK, spaceAfter=4),
@@ -47,7 +48,7 @@ STY: dict = {
 }
 STY["h1p"] = ParagraphStyle("h1p", parent=STY["h1"])  # h1/h2 inside a part (one DP of the --all-dps document)
 STY["h2p"] = ParagraphStyle("h2p", parent=STY["h2"])
-OUTLINE_LEVEL = {"part": 0, "h1": 0, "h2": 1, "h1p": 1, "h2p": 2}
+OUTLINE_LEVEL = {"part": 0, "h1": 0, "h2": 1, "h3": 2, "h1p": 1, "h2p": 2}
 
 
 @dataclass
@@ -79,6 +80,7 @@ class Ctx:
             t = f"{no}&nbsp;&nbsp;{t}{self._suffix}"
         return Paragraph(t, STY["h1p" if self._part_no else "h1"])
     def h2(self, t): return Paragraph(t, STY["h2p" if self._part_no else "h2"])
+    def h3(self, t): return Paragraph(t, STY["h3"])
     def p(self, t): return Paragraph(t, STY["body"])
     def small(self, t): return Paragraph(t, STY["small"])
 
@@ -191,7 +193,7 @@ def _footer(meta):
     return draw
 
 
-LEAD_STYLES = {"h1", "h2", "h1p", "h2p", "s"}  # headings and the small lead-in lines above tables
+LEAD_STYLES = {"h1", "h2", "h3", "h1p", "h2p", "s"}  # headings and the small lead-in lines above tables
 
 
 def _is_lead(f) -> bool:
