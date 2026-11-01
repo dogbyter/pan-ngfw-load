@@ -8,7 +8,7 @@ Location: $PAN_NGFW_LOAD_CONFIG, else ~/.config/pan-ngfw-load/pan-ngfw-load.ini.
     secrets_dir = ~/.config/pan-ngfw-load/keys # API keys + pinned TLS fingerprints (mode 700)
     sample_interval = 5m
     report_days = 7                   # time window of a scheduled report
-    log_types = traffic               # traffic, threat (comma separated)
+    log_types = traffic               # traffic, threat, decryption (comma separated)
     log_initial = 1d                  # first incremental log export looks back this far
     retain_samples = 35d
     retain_logs = 90d

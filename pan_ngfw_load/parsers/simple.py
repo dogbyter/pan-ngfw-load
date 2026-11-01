@@ -580,3 +580,33 @@ def decrypt_exclude(text: str) -> pd.DataFrame:
         break  # the cache is the same on every DP
     df = pd.DataFrame(rows, columns=["reason", "app"])
     return df.value_counts().rename("count").reset_index() if len(df) else pd.DataFrame(columns=["reason", "app", "count"])
+
+
+def commits(paths: list[Path]) -> pd.DataFrame:
+    """configd.log(.old) -> ts, job, kind: 'configuration' for configuration commits ('Commit job N completed and
+    system log generated'), otherwise the content type that triggered it (WildFire, Antivirus, EDLRefresh, ...)."""
+    starts, done, kinds, last_kind = {}, set(), {}, None
+    for p in paths:
+        try:
+            fh = open(p, errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                ts = line[:19]
+                if (m := re.search(r"(\w+) job started processing", line)):
+                    last_kind = m.group(1)
+                elif (m := re.search(r"commit to local device started, jobid (\d+)", line)):
+                    starts.setdefault(m.group(1), ts)
+                    kinds.setdefault(m.group(1), last_kind)
+                    last_kind = None
+                elif (m := re.search(r"Commit job (\d+) completed", line)):
+                    done.add(m.group(1))
+    rows = []
+    for job, ts in starts.items():
+        try:
+            t = pd.Timestamp(ts)
+        except ValueError:
+            continue
+        rows.append((t, int(job), "configuration" if job in done else (kinds.get(job) or "other")))
+    return pd.DataFrame(rows, columns=["ts", "job", "kind"]).sort_values("ts").reset_index(drop=True)

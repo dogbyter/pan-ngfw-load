@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from ..config import Config, Device
-from .api import POW_XML, Api, ApiError
+from .api import POW_XML, SSL_STATS_XML, Api, ApiError
 
 log = logging.getLogger("pan-ngfw-load")
 
@@ -33,6 +33,16 @@ SAMPLE_CMDS = {
     "system_resources": "show system resources",
 }
 
+# slower pass (once an hour, with a sample): state that changes rarely - SSL proxy, decryption rules, job history
+INVENTORY_CMDS = {
+    "decrypt_setting": "show system setting ssl-decrypt setting",
+    "decrypt_memory": "show system setting ssl-decrypt memory",
+    "decrypt_exclude": "show system setting ssl-decrypt exclude-cache",
+    "decryption_policy": "show running decryption-policy",
+    "jobs": "show jobs all",
+}
+INVENTORY_INTERVAL = 3600  # seconds
+
 TRAFFIC_FIELDS = [
     "receive_time", "time_generated", "start", "elapsed", "subtype", "action", "session_end_reason",
     "rule", "from", "to", "inbound_if", "outbound_if", "src", "sport", "dst", "dport", "natsrc", "natdst", "proto",
@@ -41,6 +51,13 @@ TRAFFIC_FIELDS = [
     "flag-decrypt-forwarded", "s_decrypted", "flag-proxy", "flag-tunnel-inspected", "flag-l7-skipped", "offloaded",
     "tunnel", "tunneled_app", "flags", "sessionid", "seqno",
 ]
+# decryption logs: no user names (srcuser) - the report needs the failure, not who
+DECRYPTION_FIELDS = [
+    "receive_time", "time_generated", "rule", "policy_name", "proxy_type", "from", "to", "src", "dst", "dport",
+    "app", "tls_version", "tls_keyxchg", "tls_enc", "tls_auth", "error", "err_index", "hs_stage_c2f", "hs_stage_f2s",
+    "root_status", "chain_status", "sni", "cn", "issuer_cn", "root_cn", "notafter", "sessionid", "seqno",
+]
+LOG_FIELDS = {"decryption": DECRYPTION_FIELDS}  # other types: TRAFFIC_FIELDS / THREAT_FIELDS
 THREAT_FIELDS = [
     "receive_time", "time_generated", "subtype", "action", "severity", "threatid", "thr_category", "direction",
     "rule", "from", "to", "src", "dst", "dport", "proto", "app", "category", "filetype", "sessionid", "seqno",
@@ -117,11 +134,24 @@ def take_sample(cfg: Config, dev: Device, api: Api, diag: Api | None) -> tuple[P
             save_xml(d / "pow_performance.xml", diag.op(POW_XML), compress=True)
         except ApiError as e:
             errors.append(f"pow_performance: {e}")
+    st = load_state(ddir)
+    last_inv = st.get("last_inventory")
+    if last_inv is None or (ts - datetime.fromisoformat(last_inv)).total_seconds() >= INVENTORY_INTERVAL - 60:
+        for stem, cli in INVENTORY_CMDS.items():
+            try:
+                save_xml(d / f"{stem}.xml", api.op_cli(cli), compress=True)
+            except ApiError as e:
+                errors.append(f"{stem}: {e}")
+        if diag is not None:
+            try:
+                save_xml(d / "ssl_stats.xml", diag.op(SSL_STATS_XML), compress=True)
+            except ApiError as e:
+                errors.append(f"ssl_stats: {e}")
+        st["last_inventory"] = ts.isoformat(timespec="seconds")
     if errors:
         (d / "errors.txt").write_text("\n".join(errors) + "\n")
         for e in errors:
             log.warning("%s sample %s: %s", dev.name, d.name, e)
-    st = load_state(ddir)
     st["last_sample"] = ts.isoformat(timespec="seconds")
     save_state(ddir, st)
     # refresh system info once a day (uptime -> boot time for the reports)
@@ -135,7 +165,7 @@ def export_logs(cfg: Config, dev: Device, api: Api, log_type: str, since: dateti
     """Export logs in [since, until] to a new CSV.gz. Pages backwards in time (newest first),
     moving the upper bound down; duplicates in the same second are skipped by seqno.
     Returns (count, newest receive_time seen)."""
-    fields = list(dict.fromkeys(TRAFFIC_FIELDS if log_type == "traffic" else THREAT_FIELDS))
+    fields = list(dict.fromkeys(LOG_FIELDS.get(log_type) or (TRAFFIC_FIELDS if log_type == "traffic" else THREAT_FIELDS)))
     out_dir = cfg.device_dir(dev.name) / "logs"
     out_dir.mkdir(exist_ok=True)
     s_since, s_until = since.strftime(TS_FMT), until.strftime(TS_FMT)
@@ -215,6 +245,9 @@ def permission_test(dev: Device) -> list[tuple[str, str, bool | None, str]]:
             ("log query (traffic)", True, lambda: a.logs("traffic", nlogs=1, poll=1.0)),
             ("op debug pow performance", True if (label == "diag" or dev.diag_key == dev.key) else None,
              lambda: a.op(POW_XML)),
+            ("op debug ssl-decrypt ssl-stats", True if (label == "diag" or dev.diag_key == dev.key) else None,
+             lambda: a.op(SSL_STATS_XML)),
+            ("log query (decryption)", True, lambda: a.logs("decryption", nlogs=1, poll=1.0)),
             ("config read (running)", False if layout_a else None,
              lambda: a._request({"type": "config", "action": "show", "xpath": "/config/devices"}, unchecked=True)),
             ("config read (candidate)", False if layout_a else None,

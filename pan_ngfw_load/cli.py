@@ -626,7 +626,7 @@ def main(argv=None) -> int:
         dev_arg(p)
         p.add_argument("--since", help="'YYYY/MM/DD HH:MM:SS' - explicit window instead of incremental")
         p.add_argument("--until", help="'YYYY/MM/DD HH:MM:SS' (default: now)")
-        p.add_argument("--type", choices=["traffic", "threat"], help="default: log_types from config")
+        p.add_argument("--type", choices=["traffic", "threat", "decryption"], help="default: log_types from config")
         p.add_argument("--filter", help="extra PAN-OS log filter, e.g. \"app eq 'dns-base'\"")
         p = sub.add_parser("report", help="build a report for the last N days into report_dir")
         dev_arg(p)

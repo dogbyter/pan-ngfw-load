@@ -369,6 +369,10 @@ def _from_cli(ds: Dataset) -> None:
                          ("vpn_sa", "show vpn ipsec-sa", simple.ipsec_sa)):
         if (txt := d.get(cmd)):
             ds.t[key] = fn(txt)
+    cfgd = sorted((ds.bundle.root / "var/log/pan").glob("configd.log*"), key=lambda x: x.name.endswith(".old"),
+                  reverse=True)  # older file first
+    if cfgd:
+        ds.t["commits"] = simple.commits(cfgd)
     if ds.bundle.crashinfo:
         ds.t["crashes"] = simple.crashinfo(ds.bundle.crashinfo)
     _scale(ds, d)

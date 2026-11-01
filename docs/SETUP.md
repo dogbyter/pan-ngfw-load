@@ -86,7 +86,7 @@ PAN-OS can't restrict API access to individual commands. The useful XML API perm
 
 | XML API permission | Needed for | Also allows (and why that matters) |
 |---|---|---|
-| **Operational Requests** | `show …` commands, `debug dataplane pow performance` | all op commands, including `request restart`, `clear session`. pan-ngfw-load never sends those (allow-list), so **protect the key file**. |
+| **Operational Requests** | `show …` commands, `debug dataplane pow performance`, `debug dataplane show ssl-decrypt ssl-stats` | all op commands, including `request restart`, `clear session`. pan-ngfw-load never sends those (allow-list), so **protect the key file**. |
 | **Log** | traffic/threat log export | reading logs |
 | Configuration, Commit, Import, Export, Report, User-ID, IoT | **not needed** – keep disabled | – |
 
@@ -110,7 +110,7 @@ Result: live samples **with** the DP breakdown by stage and function. The admin 
 ### Layout B: strictly read-only admin, optionally plus a "diag" admin
 
 - `pan-ngfw-load-readonly`: Administrator Type **Dynamic → Superuser (read-only)**. The device itself enforces read-only, but this admin **can read the whole configuration**, including password hashes. Without debug rights there's no live DP breakdown; tech support files still have it.
-- Optional `pan-ngfw-load-diag` with the custom role from layout A. pan-ngfw-load uses it only for `pow performance`.
+- Optional `pan-ngfw-load-diag` with the custom role from layout A. pan-ngfw-load uses it only for `pow performance` and the TLS statistics (`ssl-stats`).
 
 ### Recommended for both
 
@@ -143,6 +143,7 @@ Re-run it at any time: `pan-ngfw-load init --device <name>` keeps existing value
 ```
 
 - `pan-ngfw-load cron` prints the block with real paths, `pan-ngfw-load cron --install` adds or replaces it, and `pan-ngfw-load cron --remove` removes it. Other crontab lines are left alone.
+- **Once an hour** a sample also reads the state that changes rarely: SSL proxy settings and certificate cache, decryption exclusion cache, the running decryption rules, the job list (to tell configuration commits from content updates) and, with the diag key, the TLS statistics. These feed the *TLS and Decryption* section.
 - The **sample interval is not set in cron.** `tick` runs every minute and samples a device only when its `sample_interval` has passed, so each device can have its own interval.
 - Overlapping runs are skipped through per-device lock files, so a slow log export never piles up.
 - All output goes to `<data_dir>/pan-ngfw-load.log` (rotated, 3 × 5 MB).
@@ -159,7 +160,7 @@ Re-run it at any time: `pan-ngfw-load init --device <name>` keeps existing value
 | `secrets_dir` | `~/.config/pan-ngfw-load/keys` | `<key>.key`, `<key>.fingerprint` |
 | `sample_interval` | `5m` | default for all devices; per device `[device X] sample_interval` |
 | `report_days` | `7` | window of `pan-ngfw-load report` |
-| `log_types` | `traffic` | `traffic`, `threat` |
+| `log_types` | `traffic` | `traffic`, `threat`, `decryption` |
 | `log_initial` | `1d` | how far the first incremental export looks back |
 | `retain_samples` / `retain_logs` / `retain_reports` | `35d` / `90d` / `180d` | deleted by `pan-ngfw-load prune` (TSF reports are kept) |
 | `spike_threshold` | `10` | a core *spikes* while its load is this many points above the median of the other DP cores; per run: `--spike-threshold` |
@@ -167,7 +168,7 @@ Re-run it at any time: `pan-ngfw-load init --device <name>` keeps existing value
 | `capacity_dir` | `~/.config/pan-ngfw-load/capacity` | where `pan-ngfw-load capacity update` saves the public product comparison of paloaltonetworks.com - the only source of datasheet values for the extended report (capacity, configuration against model limits); missing values are named in the report. Updates merge: models or values the page no longer shows are kept with their last published value; the previous file stays as `.prev` |
 | `[device NAME] host` | – | management IP/FQDN |
 | `[device NAME] key` | NAME | key file name in `secrets_dir` |
-| `[device NAME] diag_key` | – | key allowed to run pow performance (layout A: same as `key`) |
+| `[device NAME] diag_key` | – | key allowed to run pow performance and ssl-stats (layout A: same as `key`) |
 
 Report contents: `*.pdf`, `charts/*.png`, `data/*.csv` (every table behind the report), `findings.txt` and `findings.json` (for monitoring or scripts).
 
@@ -175,7 +176,7 @@ Report contents: `*.pdf`, `charts/*.png`, `data/*.csv` (every table behind the r
 
 - **Sharing reports:** use `-a` / `--anonymize` (see README, "Anonymized reports"). It replaces hostname, serial number, the device's own IPs and a non-standard TSF file name everywhere in the output, and drops IPsec tunnel names and VPN peer addresses. In live reports only the management IP is known, because interface IPs come from a TSF. Client/server IPs, zone, rule and application names are kept.
 
-- **Only reads leave the host.** `pan_ngfw_load/collect/api.py` allows op commands starting with `<show>`, the one command `debug dataplane pow performance all`, and log queries. Everything else raises an error before it's sent.
+- **Only reads leave the host.** `pan_ngfw_load/collect/api.py` allows op commands starting with `<show>`, the two commands `debug dataplane pow performance all` and `debug dataplane show ssl-decrypt ssl-stats`, and log queries. Everything else raises an error before it's sent.
 - **API keys** are equivalent to the admin's rights. Store them only in `secrets_dir` (700/600). Never print or log them. `pan-ngfw-load` doesn't.
 - **TLS pinning:** a changed firewall certificate stops all communication until you re-run `pan-ngfw-load init` and confirm the new fingerprint.
 - **The password** is only used for key generation and isn't stored. **Changing the admin's password invalidates its API key** (observed on PAN-OS 11.2.13: every request then gets HTTP 403). After a password change, re-run `pan-ngfw-load init --device <name>` to create a new key.
@@ -186,9 +187,9 @@ Report contents: `*.pdf`, `charts/*.png`, `data/*.csv` (every table behind the r
 | Symptom | Cause / fix |
 |---|---|
 | `HTTP 403` on every request | The key is invalid: the admin's password was changed (this invalidates the key), or the admin was deleted or renamed. Fix: `pan-ngfw-load init --device X`. |
-| `HTTP 403` only for `pow performance` | Expected with a read-only (superreader) key. Use layout A or a diag admin. |
+| `HTTP 403` only for `pow performance` / `ssl-stats` | Expected with a read-only (superreader) key. Use layout A or a diag admin. |
 | `TLS certificate ... changed` | Certificate replaced on the firewall, or interception. Verify, then `pan-ngfw-load init --device X`. |
-| `blocked by local allow-list` | A request other than show/pow/log was attempted. That's intentional. |
+| `blocked by local allow-list` | A request other than show/pow/ssl-stats/log was attempted. That's intentional. |
 | Login works for `admin` only, new admins fail with "Authentication profile not found" | PAN-OS 11.2.6 bug, see section 3. Upgrade. |
 | Template admin from Panorama can't log in | Check `show config merged` on the firewall. On affected versions create the admin locally. |
 | No samples | `pan-ngfw-load status` (last sample), `tail <data_dir>/pan-ngfw-load.log`, `crontab -l` (block present?), cron running (`systemctl status cron`/`crond`)? |

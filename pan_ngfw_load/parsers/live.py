@@ -119,6 +119,49 @@ def _dir_time(name: str) -> datetime | None:
         return None
 
 
+INVENTORY = ("decrypt_setting", "decrypt_memory", "decrypt_exclude", "decryption_policy", "jobs", "ssl_stats")
+
+
+def _text(elem: ET.Element) -> str:
+    """CLI text an op command returns inside <result> (often in one <member>)."""
+    return "".join(elem.itertext())
+
+
+def commits_xml(r: ET.Element) -> pd.DataFrame:
+    """'show jobs all' -> ts, job, kind ('configuration' for commits started by an admin, otherwise the job type).
+    User names are not kept."""
+    rows = []
+    for j in r.iter("job"):
+        typ, user = j.findtext("type") or "", j.findtext("user") or ""
+        try:
+            ts = datetime.strptime(j.findtext("tenq") or "", "%Y/%m/%d %H:%M:%S")
+        except ValueError:
+            continue
+        conf = typ.lower().startswith("commit") and user not in ("", "Auto update agent")
+        rows.append((pd.Timestamp(ts), int(j.findtext("id") or 0), "configuration" if conf else typ or "other"))
+    return pd.DataFrame(rows, columns=["ts", "job", "kind"]).sort_values("ts").reset_index(drop=True)
+
+
+def inventory(files: dict[str, Path]) -> tuple[dict, dict]:
+    """Newest hourly files -> (meta, tables): SSL proxy state, exclusion cache, decryption rules, commits, TLS stats."""
+    meta, t = {}, {}
+    get = lambda stem: _xml(files[stem] / f"{stem}.xml") if stem in files else None
+    if (r := get("decrypt_setting")) is not None:
+        meta["decrypt"] = simple.decrypt_setting(_text(r))
+        if (m := get("decrypt_memory")) is not None:
+            meta["decrypt"]["cert_cache_entries"] = simple.cert_cache_entries(_text(m))
+    if (r := get("decrypt_exclude")) is not None:
+        t["decrypt_exclude"] = simple.decrypt_exclude(_text(r))
+    if (r := get("decryption_policy")) is not None:
+        t["scale_used"] = pd.DataFrame([("decryption_rules", simple.running_rules(_text(r)), None, "rules in effect")],
+                                       columns=["metric", "used", "device_limit", "source"])
+    if (r := get("jobs")) is not None:
+        t["commits"] = commits_xml(r)
+    if (r := get("ssl_stats")) is not None:
+        t["tls_stats"] = simple.tls_stats(_text(r))
+    return meta, t
+
+
 def load(coll: Path, since: datetime | None = None) -> dict:
     """Device data directory -> {'meta': {...}, 'tables': {...}, 'rm_latest': dict|None}.
 
@@ -134,9 +177,13 @@ def load(coll: Path, since: datetime | None = None) -> dict:
     sess, minute, util, groups, counters, summ, procs, pow_rows = [], [], [], [], [], [], [], []
     pow_latest = None
     rm_latest, rm_latest_ts, apps_latest, counters_latest = None, None, None, None
+    inv_files: dict[str, Path] = {}  # newest sample directory holding each hourly file
     for d in sorted((coll / "samples").glob("*")):
         if since is not None and (dt := _dir_time(d.name)) is not None and dt < since:
             continue
+        for stem in INVENTORY:
+            if (d / f"{stem}.xml.gz").exists() or (d / f"{stem}.xml").exists():
+                inv_files[stem] = d
         clock = _xml(d / "clock.xml")
         ts = parse_clock(clock.text or "") if clock is not None else None
         ts = ts or datetime.strptime(d.name, "%Y%m%d_%H%M%S")
@@ -194,7 +241,11 @@ def load(coll: Path, since: datetime | None = None) -> dict:
     if counters_latest is not None:
         t["counters_boot"] = counters_full_xml(counters_latest)
 
-    for kind in ("traffic", "threat"):
+    inv_meta, inv_t = inventory(inv_files)
+    meta.update(inv_meta)
+    t.update(inv_t)
+
+    for kind in ("traffic", "threat", "decryption"):
         files = sorted((coll / "logs").glob(f"{kind}_*.csv.gz")) + sorted((coll / "logs").glob(f"{kind}_*.csv"))
         if since is not None:  # file name: <kind>_<from>_<to>.csv.gz - skip files that end before 'since'
             files = [f for f in files if (e := _dir_time(f.name.split("_", 3)[-1])) is None or e >= since]

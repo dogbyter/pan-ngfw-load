@@ -2,7 +2,7 @@
 
 - API key is read from a key file (mode 600) and never printed or logged.
 - Allow-list: every request is checked locally before it is sent. Only log queries and op
-  commands starting with <show>, or the pow-performance debug command, are permitted,
+  commands starting with <show>, or the two debug commands below (pow performance, SSL statistics), are permitted,
   whatever the key's role would allow on the device.
 - TLS: devices usually have a self-signed certificate. The SHA-256 fingerprint is pinned
   (stored during 'pan-ngfw-load init'); a changed certificate stops all communication.
@@ -24,9 +24,11 @@ from pathlib import Path
 ALLOWED_OP = (
     re.compile(r"^<show>"),
     re.compile(r"^<debug><dataplane><pow><performance><all/></performance></pow></dataplane></debug>$"),
+    re.compile(r"^<debug><dataplane><show><ssl-decrypt><ssl-stats/></ssl-decrypt></show></dataplane></debug>$"),
 )
 ALLOWED_LOG_ACTIONS = {None, "get", "finish"}
 POW_XML = "<debug><dataplane><pow><performance><all/></performance></pow></dataplane></debug>"
+SSL_STATS_XML = "<debug><dataplane><show><ssl-decrypt><ssl-stats/></ssl-decrypt></show></dataplane></debug>"
 
 
 class ApiError(RuntimeError):
@@ -34,7 +36,8 @@ class ApiError(RuntimeError):
 
 
 def check_allowed(params: dict) -> None:
-    """Refuse anything that is not a read: op 'show'/pow-performance, or a log query."""
+    """Refuse anything that is not a read: op 'show', the pow-performance / SSL-statistics debug commands, or a
+    log query."""
     t = params.get("type")
     if t == "op" and any(rx.match(params.get("cmd", "")) for rx in ALLOWED_OP):
         return
