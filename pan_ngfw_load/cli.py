@@ -243,7 +243,7 @@ def _settings(cfg, args) -> dict:
 def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: str, anon=None,
                   settings: dict | None = None) -> list:
     from .report import Ctx, build_pdf
-    from .sections import PROFILES, SECTIONS
+    from .sections import EXTENDED, EXTENDED_ONLY, PROFILES, SECTIONS
     if anon is not None:
         for d in {id(x): x for x in [ds, *ds.nodes.values()]}.values():
             anon.apply(d)
@@ -262,11 +262,14 @@ def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: s
                             {"standard": "standard", "load": "standard", "extended": "extended"}.get(profile, profile))
     if anon is not None:
         ctx.find("info", "Anonymization", anon.summary())
+    # standard report: the sections only in the extended report still run, for their warnings and notices
+    silent = [SECTIONS[n] for n in EXTENDED if n in EXTENDED_ONLY and n not in names] \
+        if ctx.settings["report_kind"] == "standard" else []
     pdf = outdir / f"{ds.meta.get('hostname', 'device')}_{outdir.name}.pdf"
     if ds.nodes:
-        _build_cluster_pdf(ctx, names, pdf, title)
+        _build_cluster_pdf(ctx, names, pdf, title, silent)
     else:
-        build_pdf(ctx, [SECTIONS[n] for n in names], pdf, title)
+        build_pdf(ctx, [SECTIONS[n] for n in names], pdf, title, silent=silent)
     if anon is not None:  # belt and braces: findings are built from anonymized data already
         ctx.findings = [(l, a, anon.text(t)) for l, a, t in ctx.findings]
     # findings may carry PDF markup (<b>, &nbsp;) - plain text for findings.txt/json and the terminal
@@ -281,7 +284,7 @@ def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: s
     return findings
 
 
-def _build_cluster_pdf(ctx, names: list, pdf: Path, title: str) -> None:
+def _build_cluster_pdf(ctx, names: list, pdf: Path, title: str, silent: list | None = None) -> None:
     """Cluster report: whole-cluster sections, then one part per node (DP sections for its busiest DP and the
     health of its chassis), then the remaining whole-cluster sections."""
     from .report import build_pdf
@@ -303,7 +306,7 @@ def _build_cluster_pdf(ctx, names: list, pdf: Path, title: str) -> None:
                       "health of this chassis")
              for n, d in ds.nodes.items()] if mods else []
     build_pdf(ctx, [SECTIONS[n] for n in head], pdf, title, parts=parts, select_dp=select,
-              tail=[SECTIONS[n] for n in tail])
+              tail=[SECTIONS[n] for n in tail], silent=silent)
 
 
 def _link_latest(parent: Path, target: Path) -> None:

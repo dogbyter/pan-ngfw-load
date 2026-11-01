@@ -48,7 +48,7 @@ The findings are also printed in the terminal. The TSF is unpacked once into `~/
 
 ### What the report shows
 
-There are two report kinds. The **standard report** is the default; **`-x` / `--extended`** adds four sections for a deeper look.
+There are two report kinds. The **standard report** is the default; **`-x` / `--extended`** adds the sections marked *extended* for a deeper look. The standard report still checks those sections: their warnings and notices appear in its summary, marked in bold as analysed in detail only with `-x`.
 
 | Section | Answers | Report |
 |---|---|---|

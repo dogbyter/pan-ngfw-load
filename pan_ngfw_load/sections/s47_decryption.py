@@ -11,6 +11,7 @@ from .. import capacity as CAP
 from .. import charts as C
 
 TITLE = "TLS and Decryption"
+EXTENDED_DETAIL = True  # standard report: findings only, flagged in the summary
 DP_SCOPED = "partly"  # chassis: the time series come from one DP (see dataset.select_dp)
 
 PEAK_NOTICE, PEAK_WARN = 70, 90  # % of the model's decryption session limit
@@ -109,7 +110,6 @@ def build(ctx):
     if not decrypting and not proxied:
         return []
     full = ctx.settings.get("report_kind") != "standard"  # the standard report gets the findings only
-    more = "" if full else " Details: extended report (-x)."  # on the first decryption finding only
     model = ds.meta.get("model", "?")
     lim, _notes, _src, _status = CAP.limits(ctx.settings, model)
     lim_sess, lim_cache = lim.get("ssl_decrypt_sessions"), lim.get("other:ssl_decryption_ssl_certificate_cache")
@@ -128,8 +128,7 @@ def build(ctx):
     # --- findings (standard and extended) ---------------------------------------------------------------
     if not decrypting:
         ctx.find("info", "Decryption", f"No decryption configured; the SSL proxy handled {val('proxy_process'):,.0f} "
-                                       "TLS sessions that the firewall terminates itself (e.g. GlobalProtect)."
-                 + more, whole=True)
+                                       "TLS sessions that the firewall terminates itself (e.g. GlobalProtect).", whole=True)
     else:
         kinds = [k for k, v in (("forward proxy", st.get("forward_ready")),
                                 ("inbound inspection", st.get("inbound_ready"))) if v == "yes"]
@@ -141,11 +140,11 @@ def build(ctx):
         if pd.notna(peak):
             txt += f"; at most {peak:,.0f} decrypted sessions at the same time" + (
                 f" ({peak / lim_sess * 100:.0f}% of the {model}'s {lim_sess:,.0f})" if lim_sess else "")
-        ctx.find("info", "Decryption", txt + "." + more)
+        ctx.find("info", "Decryption", txt + ".")
         if lim_sess and pd.notna(peak) and peak / lim_sess * 100 >= PEAK_NOTICE:
             ctx.find("warning" if peak / lim_sess * 100 >= PEAK_WARN else "notice", "Decryption",
                      f"Decrypted sessions reached {peak:,.0f} ({peak / lim_sess * 100:.0f}% of the {model}'s limit of "
-                     f"{lim_sess:,.0f}) at {peak_ts:%d.%m. %H:%M}." + more)
+                     f"{lim_sess:,.0f}) at {peak_ts:%d.%m. %H:%M}.")
     no_res, tls13_res = val("proxy_ssl_no_resource"), val("proxy_tls13_downgrade_no_ossl_resource")
     if no_res or tls13_res:
         when = _span(prob[[k for k in RESOURCE if k in prob]].sum(axis=1)) if len(prob) else ""
@@ -154,24 +153,22 @@ def build(ctx):
                 ([f"{tls13_res:,.0f} TLS 1.3 handshakes not proxied as TLS 1.3"] if tls13_res else [])
         ctx.find("warning" if no_res + tls13_res >= RES_WARN else "notice", "Decryption",
                  "Out of proxy resources since boot: " + " and ".join(parts)
-                 + (f" (in the {win}: {when})" if when else "") + "." + more, whole=not when)
+                 + (f" (in the {win}: {when})" if when else "") + ".", whole=not when)
     if val("proxy_tunnel_taildrop") >= TAILDROP_NOTICE:
         ctx.find("notice", "Decryption", f"{val('proxy_tunnel_taildrop'):,.0f} packets dropped because the SSL proxy's "
-                                         "send queue was full (since boot)." + more, whole=True)
+                                         "send queue was full (since boot).", whole=True)
     entries = st.get("cert_cache_entries")
     if decrypting and entries and lim_cache and entries >= lim_cache * 0.95:
         ctx.find("notice", "Decryption", f"Certificate cache full: {entries:,.0f} of {lim_cache:,.0f} entries - the "
                                          "firewall keeps generating certificates again "
-                                         f"({val('ssl_cert_cache_miss'):,.0f} cache misses since boot)." + more,
+                                         f"({val('ssl_cert_cache_miss'):,.0f} cache misses since boot).",
                  whole=True)
     ver = tls[(tls.kind == "version") & (tls.side == "client")].set_index("name")["count"]
     legacy = ver[ver.index.str.match(r"^(SSL|TLS1\.[01])")].sum()
     if decrypting and ver.sum() and legacy / ver.sum() * 100 >= LEGACY_NOTICE:
         ctx.find("notice", "Decryption", f"{legacy / ver.sum() * 100:.1f}% of the decrypted client connections use "
-                                         "TLS 1.1 or older." + more, whole=True)
+                                         "TLS 1.1 or older.", whole=True)
     if not full:
-        n = next((i for i, f in enumerate(ctx.findings) if f[1].startswith("Decryption")), None)
-        ctx.findings[:] = [(lv, ar, t.replace(more, "") if i != n else t) for i, (lv, ar, t) in enumerate(ctx.findings)]
         return []
 
     # --- pages (extended report) -------------------------------------------------------------------------
