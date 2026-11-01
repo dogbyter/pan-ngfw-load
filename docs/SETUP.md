@@ -166,6 +166,7 @@ Re-run it at any time: `pan-ngfw-load init --device <name>` keeps existing value
 | `spike_threshold` | `10` | a core *spikes* while its load is this many points above the median of the other DP cores; per run: `--spike-threshold` |
 | `spike_min_duration` | `15m` | ... for at least this long (dips under 5 min are bridged); per run: `--spike-min-duration` |
 | `capacity_dir` | `~/.config/pan-ngfw-load/capacity` | where `pan-ngfw-load capacity update` saves the public product comparison of paloaltonetworks.com - the only source of datasheet values for the extended report (capacity, configuration against model limits); missing values are named in the report. Updates merge: models or values the page no longer shows are kept with their last published value; the previous file stays as `.prev` |
+| `paper` | `a4` | PDF page format: `a4` (worldwide), `letter` or `legal` (North America); `--paper` overrides it per report |
 | `[device NAME] host` | – | management IP/FQDN |
 | `[device NAME] key` | NAME | key file name in `secrets_dir` |
 | `[device NAME] diag_key` | – | key allowed to run pow performance and ssl-stats (layout A: same as `key`) |

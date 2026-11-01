@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, LEGAL, LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, inch
 from reportlab.lib.utils import ImageReader
@@ -30,6 +30,15 @@ RULE = colors.HexColor("#d8d7d2")
 HEAD_BG = colors.HexColor("#eef3fb")
 LEVEL_COL = {"info": "#2a78d6", "notice": "#eda100", "warning": "#d03b3b"}
 DPI = 200  # chart PNG resolution
+# office paper formats (--paper / config 'paper'); A4 is the narrowest, so charts and tables are sized for it
+PAPER = {"a4": A4, "letter": LETTER, "legal": LEGAL}
+# the left margin leaves room for punching/binding, the right one only what printers need (about 5 mm)
+LEFT_MARGIN, RIGHT_MARGIN = 1.6 * cm, 1.0 * cm
+
+
+def content_cm(page) -> float:
+    """Usable width: page minus margins and reportlab's 6 pt frame padding per side."""
+    return (page[0] - LEFT_MARGIN - RIGHT_MARGIN) / cm - 0.45
 
 _ss = getSampleStyleSheet()
 STY: dict = {
@@ -92,7 +101,11 @@ class Ctx:
             section += f" ({self._whole})" if whole else f" ({self._label})"
         self.findings.append((level, section, text))
 
-    def figure(self, f, name: str, caption: str | None = None, width_cm: float = 17.0):
+    @property
+    def page(self):
+        return PAPER.get(str(self.settings.get("paper", "a4")).lower(), A4)
+
+    def figure(self, f, name: str, caption: str | None = None, width_cm: float | None = None):
         self._n += 1
         path = self.chartdir / f"{self._n:02d}_{name}.png"
         f.tight_layout()
@@ -101,7 +114,7 @@ class Ctx:
         f.savefig(path, dpi=DPI, bbox_inches="tight", pad_inches=0.04)
         plt.close(f)
         pw, ph = ImageReader(str(path)).getSize()
-        w = min(pw / DPI * inch, width_cm * cm)
+        w = min(pw / DPI * inch, (width_cm or content_cm(self.page)) * cm)
         img = Image(str(path), width=w, height=w * ph / pw)
         items = [img]
         if caption:
@@ -183,13 +196,13 @@ def _fit_columns(headers: list[str], cells: list[list[str]], widths: list[float]
 _fit_headers = lambda headers, widths: _fit_columns(headers, [], widths)  # header-only variant
 
 
-def _footer(meta):
+def _footer(meta, page=A4):
     def draw(canvas, doc):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(INK2)
-        canvas.drawString(1.6 * cm, 1.0 * cm, f"{meta.get('hostname', '?')} - {meta.get('bundle', '')} - pan-ngfw-load {__version__}")
-        canvas.drawRightString(A4[0] - 1.6 * cm, 1.0 * cm, f"Page {doc.page}")
+        canvas.drawString(LEFT_MARGIN, 1.0 * cm, f"{meta.get('hostname', '?')} - {meta.get('bundle', '')} - pan-ngfw-load {__version__}")
+        canvas.drawRightString(page[0] - RIGHT_MARGIN, 1.0 * cm, f"Page {doc.page}")
         canvas.restoreState()
     return draw
 
@@ -322,7 +335,7 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
     ]
     front += [Paragraph("Contents", STY["toc_title"]), toc, PageBreak()]
 
-    doc = SimpleDocTemplate(str(path), pagesize=A4, leftMargin=1.6 * cm, rightMargin=1.6 * cm,
+    doc = SimpleDocTemplate(str(path), pagesize=ctx.page, leftMargin=LEFT_MARGIN, rightMargin=RIGHT_MARGIN,
                             topMargin=1.5 * cm, bottomMargin=1.6 * cm, title=title,
                             author="pan-ngfw-load", subject=meta.get("hostname", ""))
     counter = {"n": 0, "h1": False}
@@ -356,7 +369,8 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
 
     doc.beforeDocument = before
     doc.afterFlowable = after
-    doc.multiBuild(front + keep_leads_with_content(body), onFirstPage=_footer(meta), onLaterPages=_footer(meta))
+    foot = _footer(meta, ctx.page)
+    doc.multiBuild(front + keep_leads_with_content(body), onFirstPage=foot, onLaterPages=foot)
 
 
 def _cluster_front(ds) -> list:

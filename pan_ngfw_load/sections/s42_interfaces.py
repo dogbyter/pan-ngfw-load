@@ -55,18 +55,23 @@ def build(ctx):
         + ("" if want_sub else " <b>Tip:</b> run the report with <b>--subinterfaces</b> for detailed statistics of "
            "every sub-interface and VLAN interface (zone, VLAN, router, traffic, drops)."))]
 
-    show = ic[["interface", "speed", "rx_bytes", "tx_bytes"] + (["rx_mbps", "tx_mbps", "use_pct"] if up else [])
+    ic["zone"] = ic.interface.map(_zone_of(ds))
+    show = ic[["interface", "zone", "speed", "rx_bytes", "tx_bytes"] + (["rx_mbps", "tx_mbps", "use_pct"] if up else [])
               + ["pkt", "rx_errors", "err_ppm"]].rename(columns={
-                  "speed": "link", "rx_bytes": "received", "tx_bytes": "sent", "rx_mbps": "avg in",
-                  "tx_mbps": "avg out", "use_pct": "avg use", "pkt": "avg pkt", "rx_errors": "rx errors",
-                  "err_ppm": "errors / M pkts"})
+                  "speed": "link", "rx_bytes": "received", "tx_bytes": "sent", "rx_mbps": "avg in Mb/s",
+                  "tx_mbps": "avg out Mb/s", "use_pct": "avg use", "pkt": "avg pkt", "rx_errors": "rx errors",
+                  "err_ppm": "err / M pkts"})
     fmt = {"link": lambda v: "-" if pd.isna(v) else (f"{v / 1000:g}G" if v >= 1000 else f"{v:g}M"),
            "received": lambda v: C.human(v) + "B", "sent": lambda v: C.human(v) + "B",
-           "avg in": lambda v: f"{v:,.0f} Mb/s", "avg out": lambda v: f"{v:,.0f} Mb/s",
+           "avg in Mb/s": lambda v: f"{v:,.0f}", "avg out Mb/s": lambda v: f"{v:,.0f}",
            "avg use": lambda v: "-" if pd.isna(v) else f"{v:.1f}%", "avg pkt": lambda v: "-" if pd.isna(v) else f"{v:,.0f} B",
            "rx errors": lambda v: f"{v:,.0f}", "errors / M pkts": lambda v: "-" if pd.isna(v) else f"{v:.2f}"}
-    widths = [2.4, 1.2, 1.8, 1.8] + ([1.9, 1.9, 1.5] if up else []) + [1.5, 1.6, 1.6]
+    widths = [2.0, 2.3, 1.0, 1.4, 1.4] + ([1.6, 1.6, 1.2] if up else []) + [1.1, 1.3, 1.1]  # widened where needed
     out.append(ctx.table(show, widths, fmt=fmt))
+    out.append(ctx.small("<b>zone</b>: the security zone of the port itself; <i>in aeN</i> = member of an aggregate "
+                         "group (the zone is on the group or its sub-interfaces); <i>sub-interfaces</i> = the zones "
+                         "are on the port's VLAN sub-interfaces" + (" (see 'Sub-interfaces' below)" if want_sub else
+                                                                  " (--subinterfaces lists them)") + "."))
 
     phys = ic[~ic.interface.str.match(rf"^{NODE}ae")]  # an aggregate repeats its members' traffic
     out += _aggregates(ctx, allc)
@@ -91,6 +96,26 @@ def build(ctx):
         out += _subinterfaces(ctx, allc, up)
     if ds.has("if_counters_nodes"):
         out += _node_shares(ctx, phys.interface)
+    return out
+
+
+def _zone_of(ds) -> dict:
+    """Port or aggregate group -> zone label for the ports table: its own zone, 'in aeN' for an aggregate member,
+    'sub-interfaces' when the zones are on its VLAN sub-interfaces, '-' otherwise."""
+    lg = ds["if_logical"] if ds.has("if_logical") else pd.DataFrame(columns=["interface", "zone"])
+    zone = dict(zip(lg.interface, lg.zone.fillna("")))
+    ae = dict(zip(ds["ae_members"].interface, ds["ae_members"].ae)) if ds.has("ae_members") else {}
+    names = set(lg.interface) | set(ds["if_counters"].interface if ds.has("if_counters") else [])
+    out = {}
+    for n in names:
+        if n in ae:
+            out[n] = f"in {ae[n]}"
+        elif zone.get(n):
+            out[n] = zone[n]
+        elif any(x.startswith(n + ".") and zone.get(x) for x in zone):
+            out[n] = "sub-interfaces"
+        else:
+            out[n] = "-"
     return out
 
 

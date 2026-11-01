@@ -93,6 +93,7 @@ pan-ngfw-load tsf file.tgz -p dp                    # DP-only profile (no MP sec
 pan-ngfw-load tsf file.tgz -s dp_load,core_spikes   # only these sections
 pan-ngfw-load tsf file.tgz --spike-threshold 15 --spike-min-duration 30m
 pan-ngfw-load tsf extracted_dir/                    # an already unpacked TSF works too
+pan-ngfw-load tsf --paper letter file.tgz           # PDF in US Letter (a4 = default, letter, legal)
 pan-ngfw-load -h tsf                                # all options
 ```
 

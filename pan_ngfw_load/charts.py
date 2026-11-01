@@ -52,9 +52,9 @@ def colors_for(keys: list[str], fixed: dict[str, str] | None = None) -> dict[str
     return out
 
 
-# Figures are drawn at the width they are printed at (17 cm), so the font sizes above are the real
+# Figures are drawn at the width they are printed at (17.8 cm), so the font sizes above are the real
 # point sizes in the PDF - nothing gets scaled up or down.
-W = 6.7
+W = 7.0  # inches = 17.8 cm, the content width of an A4 page with the report's margins
 VALUE_FS = 6  # direct value labels next to bars / points
 
 

@@ -234,7 +234,8 @@ def _settings(cfg, args) -> dict:
     dur = C.parse_duration(args.spike_min_duration) if args.spike_min_duration else cfg.spike_min_duration
     return {"spike_threshold": th, "spike_min_minutes": max(1, round(dur / 60)),
             "subinterfaces": bool(getattr(args, "subinterfaces", False)), "dp": getattr(args, "dp", None),
-            "capacity_dir": cfg.capacity_dir}
+            "capacity_dir": cfg.capacity_dir,
+            "paper": getattr(args, "paper", None) or getattr(cfg, "paper", "a4")}
 
 
 def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: str, anon=None,
@@ -613,6 +614,8 @@ def main(argv=None) -> int:
                        help="core spike: load points above the median of the other DP cores (default: config, 10)")
         p.add_argument("--spike-min-duration", metavar="DURATION",
                        help="core spike: minimum duration, e.g. 15m (default: config, 15m)")
+        p.add_argument("--paper", choices=["a4", "letter", "legal"],
+                       help="PDF page format: a4 (worldwide), letter or legal (North America) (default: config, a4)")
 
     if live:
         p = sub.add_parser("init", help="guided setup: paths, firewall, admin role/admin, API key, TLS pinning, permission test, cron")
