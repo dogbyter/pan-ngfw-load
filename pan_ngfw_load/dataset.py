@@ -25,7 +25,7 @@ WINDOW_NAMES = {1: "second", 60: "minute", 3600: "hour", 86400: "day", 604800: "
 # chosen with select_dp(); everything else covers the whole firewall.
 DP_TABLES = ("rm_cpu", "rm_util", "rm_groups", "pow_boot", "pow_core", "pow_status", "dpm_session", "dpm_groups15s",
              "dpm_counters", "dpm_pow", "dpm_minute", "dpm_util", "dp_pow_interval", "dp_counter_rates")
-DP_META = ("dp_cores", "dp_core_count", "dp")
+DP_META = ("dp_cores", "dp_core_count", "dp", "pow_waiting")
 
 
 @dataclass
@@ -139,7 +139,8 @@ def build_cluster(bundles: list[Bundle]) -> Dataset:
         other = [c for c in allp.columns if c not in num + by + ["node"]]
         tot = allp.groupby(by, sort=False).agg({**{c: "sum" for c in num}, **{c: "first" for c in other}}).reset_index()
         return tot, allp
-    for key, by in (("if_counters", ["interface"]), ("counters_boot", ["name"]), ("apps", ["vsys", "app"])):
+    for key, by in (("if_counters", ["interface"]), ("counters_boot", ["name"]), ("apps", ["vsys", "app"]),
+                    ("tls_stats", ["kind", "name", "side"]), ("decrypt_exclude", ["reason", "app"])):
         tot, allp = summed(key, by)
         if tot is not None:
             base.t[key] = tot[[c for c in allp.columns if c != "node"]]
@@ -175,7 +176,9 @@ def select_dp(ds: Dataset, name: str | None) -> None:
         _rm_tables(ds, rm, now)
     if texts.get("pp"):
         df = powperf.parse(texts["pp"])
-        ds.t["pow_boot"] = _enrich_pow(df[df.core == -1].drop(columns="core"))
+        boot = df[df.core == -1].drop(columns="core")
+        ds.meta["pow_waiting"] = sorted({n for _k, n in K.waiting(boot)})
+        ds.t["pow_boot"] = _enrich_pow(boot)
     for txt in texts.get("pp_core", []):  # per-core tables (may be split over several commands)
         df = powperf.parse(txt)
         if not df.empty:
@@ -342,6 +345,14 @@ def _from_cli(ds: Dataset) -> None:
         ds.t["sessions_now"] = simple.session_list(txt)
     if (txt := d.get("show session info")):
         ds.meta["session_info"] = simple.session_info(txt)
+    # TLS / decryption (SSL proxy)
+    if (txt := d.get("debug dataplane show ssl-decrypt ssl-stats")):
+        ds.t["tls_stats"] = simple.tls_stats(txt)
+    if (txt := d.get("show system setting ssl-decrypt setting")):
+        ds.meta["decrypt"] = simple.decrypt_setting(txt)
+        ds.meta["decrypt"]["cert_cache_entries"] = simple.cert_cache_entries(d.get("show system setting ssl-decrypt memory") or "")
+    if (txt := d.get("show system setting ssl-decrypt exclude-cache")):
+        ds.t["decrypt_exclude"] = simple.decrypt_exclude(txt)
     if (txt := d.get("show cluster all")) and "not enabled" not in txt:
         ds.meta["cluster"] = simple.cluster_settings(txt)
     if (txt := d.get("show counter global")):
@@ -405,7 +416,7 @@ def _scale(ds: Dataset, d) -> None:
             rows.append((metric, n, None, "rules in effect"))
         elif metric in cfg:
             rows.append((metric, cfg[metric], None, "configuration"))
-    for metric in ("app_override_rules", "dos_rules", "qos_rules", "address_objects", "address_groups",
+    for metric in ("app_override_rules", "dos_rules", "qos_rules", "ssl_inbound_certs", "address_objects", "address_groups",
                    "service_objects", "service_groups", "edl_lists", "url_custom_categories", "zones", "virtual_routers"):
         if metric in cfg:
             rows.append((metric, cfg[metric], None, "configuration"))
@@ -432,7 +443,8 @@ def _scale(ds: Dataset, d) -> None:
 
 
 def _enrich_pow(df: pd.DataFrame) -> pd.DataFrame:
-    df = df[~((df.kind == "group") & df.name.isin(K.NOT_CPU_GROUPS))].copy()  # waiting time, not CPU
+    wait = K.waiting(df)  # waiting time, not CPU
+    df = df[[k not in wait for k in zip(df.kind, df.name)]].copy()
     df["stage"] = np.where(df.kind == "group", df.name.map(K.group_stage), None)
     df["feature"] = np.where(df.kind == "func", df.name.map(lambda n: K.func_feature(n) or "(latency, not CPU)"), None)
     return df
@@ -441,8 +453,11 @@ def _enrich_pow(df: pd.DataFrame) -> pd.DataFrame:
 def _derive_pow(ds: Dataset) -> None:
     """pow performance: accumulated -> per-interval CPU share of total DP capacity."""
     pw = ds["dpm_pow"]
-    if not pw.empty:
-        pw = pw[~((pw.kind == "group") & pw.name.isin(K.NOT_CPU_GROUPS))]
+    if not pw.empty:  # waiting time, judged by the accumulated average of the newest snapshot
+        wait = K.waiting(pw[pw.ts == pw.ts.max()])
+        if wait:
+            ds.meta["pow_waiting"] = sorted({n for _k, n in wait} | set(ds.meta.get("pow_waiting") or []))
+        pw = pw[[k not in wait for k in zip(pw.kind, pw.name)]]
     ncores = ds.meta.get("dp_core_count") or 1
     if pw.empty:
         return

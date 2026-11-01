@@ -471,6 +471,10 @@ def config_scale(config_xml: Path) -> dict[str, int]:
         "security_rules": rb("security"), "nat_rules": rb("nat"), "decryption_rules": rb("decryption"),
         "pbf_rules": rb("pbf"), "app_override_rules": rb("application-override"), "dos_rules": rb("dos"),
         "qos_rules": rb("qos"),
+        # certificates of inbound-inspection decryption rules (older: <certificate>, newer: <certificates><member>)
+        "ssl_inbound_certs": len({c.text.strip() for s in scopes for kind in ("rulebase", "pre-rulebase", "post-rulebase")
+                                  for e in s.findall(f"{kind}/decryption/rules/entry/type/ssl-inbound-inspection")
+                                  for c in e.iter() if c.tag in ("certificate", "member") and (c.text or "").strip()}),
         "panorama_managed": int(root.find(".//deviceconfig/system/panorama") is not None or _pushed(config_xml)),
     }
 
@@ -506,3 +510,73 @@ def total_count(text: str) -> int | None:
     """'Total: 12 users' / 'Total: 0 registered addresses' / 'Total Current Users: 3' -> the number."""
     m = re.search(r"Total(?: Current Users)?:\s*(\d+)", text or "")
     return int(m.group(1)) if m else None
+
+
+# --- TLS / decryption ----------------------------------------------------------------------------------------
+def tls_stats(text: str) -> pd.DataFrame:
+    """'debug dataplane show ssl-decrypt ssl-stats' -> kind (version | cipher | resume), name, side (client |
+    server), count. 'client' = the client side of the SSL proxy, 'server' = the server side. Chassis models print
+    one block per DP - the counts are added up."""
+    from .cli import split_dp
+    rows, kind = [], None
+    kinds = {"SSL Protocol Version Stats": "version", "SSL Cipher Suite Stats": "cipher", "SSL Session Resume Stats": "resume"}
+    for block in split_dp(text).values():
+        for line in block.splitlines():
+            s = line.strip()
+            if s in kinds:
+                kind = kinds[s]
+            elif kind and (m := re.match(r"^(.+?)\s+From (Client|Server): (\d+)$", s)):
+                rows.append((kind, m.group(1).strip(), m.group(2).lower(), int(m.group(3))))
+    df = pd.DataFrame(rows, columns=["kind", "name", "side", "count"])
+    return df.groupby(["kind", "name", "side"], as_index=False, sort=False)["count"].sum()
+
+
+def decrypt_setting(text: str) -> dict:
+    """'show system setting ssl-decrypt setting' -> state of the SSL proxy (any vsys counts)."""
+    from .cli import split_dp
+    out = {}
+    for block in split_dp(text).values():
+        for line in block.splitlines():
+            if ":" not in line:
+                continue
+            k, v = (x.strip() for x in line.split(":", 1))
+            key = {"Forward Proxy Ready": "forward_ready", "Inbound Proxy Ready": "inbound_ready",
+                   "Block revoked Cert": "block_revoked", "Verify CRL": "verify_crl", "Verify OCSP": "verify_ocsp",
+                   "Use Cert Cache": "cert_cache"}.get(k)
+            if key:
+                out[key] = "yes" if out.get(key) == "yes" or v.lower() == "yes" else v.lower()
+        break  # every DP has the same settings
+    return out
+
+
+def cert_cache_entries(text: str) -> int | None:
+    """'show system setting ssl-decrypt memory' -> current entries in the SSL certificate cache (largest DP)."""
+    from .cli import split_dp
+    vals = [int(m.group(1)) for t in split_dp(text).values() for m in [re.search(r"Current Entries:\s*(\d+)", t)] if m]
+    return max(vals) if vals else None
+
+
+def decrypt_exclude(text: str) -> pd.DataFrame:
+    """'show system setting ssl-decrypt exclude-cache' -> reason, app, count. Server names are left out."""
+    from .cli import split_dp
+    rows = []
+    for block in split_dp(text).values():
+        lines = block.splitlines()
+        head = next((l for l in lines if l.startswith("VSYS")), None)
+        if head is None:
+            continue
+        cols = [(m.group(0), m.start()) for m in re.finditer(r"\S+", head)]
+        pos = {n: i for i, (n, _) in enumerate(cols)}
+        if "REASON" not in pos:
+            continue
+
+        def cell(line, name):
+            i = pos[name]
+            end = cols[i + 1][1] if i + 1 < len(cols) else None
+            return line[cols[i][1]:end].strip()
+        for l in lines[lines.index(head) + 1:]:
+            if l.strip() and l[:1].isdigit():
+                rows.append((cell(l, "REASON") or "(none)", cell(l, "APP") if "APP" in pos else ""))
+        break  # the cache is the same on every DP
+    df = pd.DataFrame(rows, columns=["reason", "app"])
+    return df.value_counts().rename("count").reset_index() if len(df) else pd.DataFrame(columns=["reason", "app", "count"])

@@ -27,9 +27,11 @@ def build(ctx):
         "<b>functions</b> (<i>debug dataplane pow performance</i>). The two views are measured separately. "
         "Functions can also run outside every group: the timer check <i>tim_check</i> alone uses more time than "
         "all groups together. So each view is compared only within itself. Functions that measure waiting "
-        "time (latency) are left out, and so is the group <i>qat_result</i>: it measures waiting for the QAT "
-        "crypto engine, not CPU work. Mapping functions to features (App-ID, threat inspection, ...) is "
-        "inferred from their names.")]
+        "time (latency) are left out, and so is every group or function that takes more than "
+        f"{K.WAIT_AVG_US / 1e6:g} s per call on average - DP work runs to completion in microseconds, so such "
+        "values measure waiting, e.g. for the crypto offload engine"
+        + (f" (here: {', '.join(f'<i>{n}</i>' for n in ds.meta['pow_waiting'])})" if ds.meta.get("pow_waiting") else "")
+        + ". Mapping functions to features (App-ID, threat inspection, ...) is inferred from their names.")]
 
     pb = ds["pow_boot"]
     g = pb[pb.kind == "group"].copy()

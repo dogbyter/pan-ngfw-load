@@ -14,6 +14,72 @@ TITLE = "Capacity - how much headroom is left"
 DP_SCOPED = "partly"  # chassis: rates and load over time come from one DP (see dataset.select_dp)
 
 CEILING = 80  # % DP load treated as the practical limit (latency and drops rise above)
+TLS_NOTICE = 70  # % of a TLS/SSL limit
+
+
+def _tls(ctx, sheet: dict) -> list:
+    """TLS / SSL decryption: every value the firewall reports or the configuration holds against the model's
+    public limits (decrypted sessions, certificate cache, inbound certificates, rules) plus rates without a limit."""
+    ds = ctx.ds
+    c = ds["counters_boot"].set_index("name").value if ds.has("counters_boot") else pd.Series(dtype=float)
+    now = lambda n: float(c.get(n, 0) or 0)
+    dc = ds["dpm_counters"] if ds.has("dpm_counters") else pd.DataFrame(columns=["ts", "name", "value"])
+    gauge = dc[dc.name.isin(["proxy_sessions_forward", "proxy_sessions"])].pivot_table(
+        index="ts", columns="name", values="value", aggfunc="last").fillna(0)  # missing sample = 0
+    rates = ds["dp_counter_rates"] if ds.has("dp_counter_rates") else pd.DataFrame(columns=["ts", "name", "rate"])
+    rate = lambda *names: rates[rates.name.isin(names)].groupby("ts").rate.sum()
+    su = ds["scale_used"].set_index("metric").used if ds.has("scale_used") else pd.Series(dtype=float)
+    st = ds.meta.get("decrypt") or {}
+    if not (st or c.index.str.startswith(("proxy_", "ssl_")).any() or any(k in sheet for k in (
+            "ssl_decrypt_sessions", "other:ssl_decryption_ssl_certificate_cache", "ssl_inbound_certs"))):
+        return []
+
+    def peak(col):
+        w = gauge[col].max() if col in gauge else np.nan
+        return np.nanmax([w, now(col)])
+
+    new_dec, checked = rate("proxy_acc_convert_to_forward_proxy", "proxy_acc_convert_to_inbound_proxy"), \
+        rate("proxy_process_accumulation")
+    rows = [  # metric, measured, limit key, how measured
+        ("Decrypted sessions at the same time", peak("proxy_sessions_forward"), "ssl_decrypt_sessions",
+         "peak of the 10-minute samples and now"),
+        ("All SSL proxy sessions at the same time", peak("proxy_sessions"), None,
+         "incl. no-decrypt checks and firewall-terminated TLS"),
+        ("SSL certificate cache", st.get("cert_cache_entries"), "other:ssl_decryption_ssl_certificate_cache",
+         "entries now"),
+        ("Inbound inspection certificates", su.get("ssl_inbound_certs"), "ssl_inbound_certs", "configuration"),
+        ("Decryption rules", su.get("decryption_rules"), "decryption_rules", "rules in effect"),
+        ("New decrypted sessions per second", new_dec.max() if len(new_dec) else np.nan, None,
+         "busiest 10-minute interval"),
+        ("TLS sessions checked per second", checked.max() if len(checked) else np.nan, None,
+         "busiest 10-minute interval"),
+        ("GlobalProtect clientless VPN SSL tunnels", np.nan, "other:globalprotect_clientless_vpn_max_ssl_tunnels",
+         "not in the TSF"),
+    ]
+    tab = []
+    for name, measured, key, how in rows:
+        limit = sheet.get(key) if key else None
+        whole = measured is not None and pd.notna(measured) and (measured >= 10 or float(measured).is_integer())
+        m = "-" if measured is None or pd.isna(measured) else f"{measured:,.0f}" if whole else f"{measured:,.2f}"
+        use = measured / limit * 100 if limit and measured is not None and pd.notna(measured) else None
+        tab.append((name, m, "-" if not limit else f"{limit:,.0f}",
+                    "-" if use is None else ("<1%" if 0 < use < 1 else f"{use:.0f}%"), how))
+        # decrypted sessions and the certificate cache have their findings in 'TLS and Decryption'
+        if use is not None and use >= TLS_NOTICE and key in ("ssl_inbound_certs", "decryption_rules"):
+            ctx.find("warning" if use >= 90 else "notice", "Capacity", f"{name}: {m} of {limit:,.0f} ({use:.0f}%).",
+                     whole=True)
+    notes = CAP.limits(ctx.settings, ds.meta.get("model", ""))[1]
+    feats = [f"{lab}: {notes.get(k, '-')}" for lab, k in (("HSM", "other:ssl_decryption_hsm_supported"),
+             ("decryption port mirror", "other:ssl_decryption_decryption_port_mirror"),
+             ("network packet broker", "other:ssl_decryption_network_packet_broker")) if notes.get(k)]
+    out = [ctx.h2("TLS and decryption against the limits"),
+           ctx.table(pd.DataFrame(tab, columns=["metric", "measured", "limit", "used", "measured how"]),
+                     [5.4, 2.2, 2.0, 1.4, 6.0]),
+           ctx.small("Limits from the public product comparison; '-' where it has none. Details on decryption: "
+                     "section 'TLS and Decryption'."
+                     + (f" Decryption features of the model - {', '.join(feats)}." if feats else "")
+                     + (" On chassis models the per-second rates and peaks come from one DP." if ds.dps else ""))]
+    return out
 
 
 def _dp_load_vs_pps(ds) -> pd.DataFrame:
@@ -85,6 +151,8 @@ def build(ctx):
             "packet goes through that inspection with its test mix, while real traffic is partly not inspected (IPsec "
             "pass-through, application overrides, rules without security profiles) or uses larger packets. Whether "
             "the dataplane is really close to its limit shows in its load - see the headroom below."))
+
+    out += _tls(ctx, sheet)
 
     # --- headroom from load vs packet rate ------------------------------------------------
     df = _dp_load_vs_pps(ds)

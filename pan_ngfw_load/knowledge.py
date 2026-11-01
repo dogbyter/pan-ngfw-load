@@ -47,9 +47,16 @@ def group_desc(name: str) -> str:
 # --- functions -> feature categories ----------------------------------------
 # Functions that measure waiting time (latency), not CPU time. Excluded from CPU shares.
 NOT_CPU = re.compile(r"latency|^poll_delay")
-# Groups that measure waiting for an offload engine, not CPU time: on PA-7500 qat_result accumulates seconds per
-# item, more than all DP cores together could work since boot. Left out of every CPU share.
-NOT_CPU_GROUPS = {"qat_result"}
+# Groups and functions that measure waiting (e.g. for the QAT crypto offload engine), not CPU time: DP work runs to
+# completion in microseconds per call, but qat_result or ecdhe_gen_key_exchange_msg average seconds - more than
+# all DP cores together could work. Anything above this average per call is left out of every CPU share.
+WAIT_AVG_US = 100_000
+
+
+def waiting(df: "pd.DataFrame") -> set:
+    """Names (kind, name) in a pow performance table whose accumulated average per call shows waiting time."""
+    avg = df.ac_total_us / df.ac_count.where(df.ac_count > 0)
+    return set(zip(df.kind[avg > WAIT_AVG_US], df.name[avg > WAIT_AVG_US]))
 
 FEATURES = [
     ("App-ID & protocol decoders", r"^(appid_|detector_run|sml_vm|cad_appsig|http2_)"),
