@@ -16,6 +16,8 @@ spike_threshold = 10                # core spike: load points above the median o
 spike_min_duration = 15m            # ... lasting at least this long (report section 'Core spikes')
 capacity_dir = ~/.config/pan-ngfw-load/capacity   # public model limits ('pan-ngfw-load capacity update')
 paper = a4                          # PDF page format: a4, letter, legal
+format = pdf                        # report output: pdf, html (one self-contained file) or both
+page_per_section = no               # PDF: one long page per section instead of paper pages
 
 [device fw01]
 host = 192.0.2.10                   # management IP or FQDN of the firewall

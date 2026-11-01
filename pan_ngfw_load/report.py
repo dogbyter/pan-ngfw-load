@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import re
 import traceback
 from dataclasses import dataclass, field
@@ -17,8 +18,9 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, inch
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import stringWidth
-from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table,
-                                TableStyle)
+from reportlab.pdfgen.canvas import Canvas
+from reportlab.platypus import (BaseDocTemplate, Frame, Image, KeepTogether, NextPageTemplate, PageBreak, PageTemplate,
+                                Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
 from . import __version__
@@ -34,6 +36,8 @@ DPI = 200  # chart PNG resolution
 PAPER = {"a4": A4, "letter": LETTER, "legal": LEGAL}
 # the left margin leaves room for punching/binding, the right one only what printers need (about 5 mm)
 LEFT_MARGIN, RIGHT_MARGIN = 1.6 * cm, 1.0 * cm
+TOP_MARGIN, BOTTOM_MARGIN = 1.5 * cm, 1.6 * cm
+MAX_PAGE_HEIGHT = 14000  # points, just under 200 inches - the largest page many PDF viewers (Acrobat) accept
 
 
 def content_cm(page) -> float:
@@ -353,9 +357,24 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
     ]
     front += [Paragraph("Contents", STY["toc_title"]), toc, PageBreak()]
 
-    doc = SimpleDocTemplate(str(path), pagesize=ctx.page, leftMargin=LEFT_MARGIN, rightMargin=RIGHT_MARGIN,
-                            topMargin=1.5 * cm, bottomMargin=1.6 * cm, title=title,
-                            author="pan-ngfw-load", subject=meta.get("hostname", ""))
+    out_fmt = str(ctx.settings.get("format", "pdf")).lower()
+    if out_fmt in ("html", "both"):  # the same content as one continuous, self-contained HTML file
+        from . import html_report
+        html_report.write(front, body, title, f"{meta.get('hostname', '?')} - {meta.get('bundle', '')} - "
+                                              f"pan-ngfw-load {__version__}", path.with_suffix(".html"))
+    if out_fmt == "html":
+        return
+    flows = front + keep_leads_with_content(body)
+    foot = _footer(meta, ctx.page)
+    long_pages = bool(ctx.settings.get("page_per_section"))
+    doc_kw = dict(pagesize=ctx.page, leftMargin=LEFT_MARGIN, rightMargin=RIGHT_MARGIN, topMargin=TOP_MARGIN,
+                  bottomMargin=BOTTOM_MARGIN, title=title, author="pan-ngfw-load", subject=meta.get("hostname", ""))
+    if long_pages:  # one page per section, as tall as the section
+        templates, flows = _long_pages(flows, ctx.page, foot)
+        doc = BaseDocTemplate(str(path), **doc_kw)
+        doc.addPageTemplates(templates)
+    else:
+        doc = SimpleDocTemplate(str(path), **doc_kw)
     counter = {"n": 0, "h1": False}
 
     def before():  # multiBuild runs several passes - start each one fresh
@@ -387,8 +406,57 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
 
     doc.beforeDocument = before
     doc.afterFlowable = after
-    foot = _footer(meta, ctx.page)
-    doc.multiBuild(front + keep_leads_with_content(body), onFirstPage=foot, onLaterPages=foot)
+    if long_pages:
+        doc.multiBuild(flows)
+    else:
+        doc.multiBuild(flows, onFirstPage=foot, onLaterPages=foot)
+
+
+def _height(f, canv, avail: float) -> float:
+    """Height a flowable takes in the frame, incl. its spacing. KeepTogether reports a huge height on purpose (to
+    force a split), also through nested ones - so its parts are measured one by one."""
+    if isinstance(f, KeepTogether):
+        return sum(_height(x, canv, avail) for x in f._content)
+    return f.wrapOn(canv, avail, MAX_PAGE_HEIGHT)[1] + f.getSpaceBefore() + f.getSpaceAfter()
+
+
+def _long_pages(flows: list, page, foot) -> tuple[list, list]:
+    """--page-per-section: every block between two page breaks (title and summary, each section, the appendix) gets
+    a page template exactly as tall as its content at the page width; the contents page keeps the paper size. A
+    block taller than MAX_PAGE_HEIGHT continues on another page of that height."""
+    w, h = page
+    avail = w - LEFT_MARGIN - RIGHT_MARGIN - 12  # frame padding 6 pt per side
+
+    def flat(items):  # a whole section sits on one page - keep-together blocks only force needless page breaks
+        for f in items:
+            if isinstance(f, KeepTogether):
+                yield from flat(f._content)
+            else:
+                yield f
+    chunks = [[]]
+    for f in flat(flows):
+        if isinstance(f, PageBreak):
+            chunks.append([])
+        else:
+            chunks[-1].append(f)
+    chunks = [c for c in chunks if c]
+    templates, out = [], []
+    scratch = Canvas(io.BytesIO(), pagesize=page)  # some flowables (KeepTogether) need a canvas to measure
+    for i, ch in enumerate(chunks):
+        if any(isinstance(f, TableOfContents) for f in ch):
+            height = h
+        else:
+            need = 0.0
+            for f in ch:
+                need += _height(f, scratch, avail)
+            height = min(max(need * 1.015 + 30 + TOP_MARGIN + BOTTOM_MARGIN, 8 * cm), MAX_PAGE_HEIGHT)
+        frame = Frame(LEFT_MARGIN, BOTTOM_MARGIN, w - LEFT_MARGIN - RIGHT_MARGIN, height - TOP_MARGIN - BOTTOM_MARGIN,
+                      id=f"f{i}")
+        templates.append(PageTemplate(id=f"p{i}", frames=[frame], pagesize=(w, height), onPage=foot))
+        if i:
+            out += [NextPageTemplate(f"p{i}"), PageBreak()]
+        out += ch
+    return templates, out
 
 
 def _cluster_front(ds) -> list:

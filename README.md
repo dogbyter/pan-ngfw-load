@@ -39,6 +39,7 @@ The report goes to `~/pan-ngfw-load/reports/<hostname>/tsf_<file>/`:
 | File | Content |
 |---|---|
 | `<hostname>_tsf_<file>.pdf` | the report - summary of findings, a contents page with links to the sections (also as PDF bookmarks), the sections, appendix |
+| `<hostname>_tsf_<file>.html` | with `--format html` or `both`: the same report as one continuous HTML file - charts embedded, no other files needed |
 | `findings.txt`, `findings.json` | the summary of findings (info / notice / warning) |
 | `charts/*.png` | every chart of the report |
 | `data/*.csv` | every table behind the report, for your own analysis |
@@ -94,6 +95,8 @@ pan-ngfw-load tsf file.tgz -s dp_load,core_spikes   # only these sections
 pan-ngfw-load tsf file.tgz --spike-threshold 15 --spike-min-duration 30m
 pan-ngfw-load tsf extracted_dir/                    # an already unpacked TSF works too
 pan-ngfw-load tsf --paper letter file.tgz           # PDF in US Letter (a4 = default, letter, legal)
+pan-ngfw-load tsf --format html file.tgz            # one self-contained HTML file instead of the PDF (or: both)
+pan-ngfw-load tsf --page-per-section file.tgz       # PDF with one long page per section (for reading on screen)
 pan-ngfw-load -h tsf                                # all options
 ```
 

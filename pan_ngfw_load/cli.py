@@ -235,7 +235,9 @@ def _settings(cfg, args) -> dict:
     return {"spike_threshold": th, "spike_min_minutes": max(1, round(dur / 60)),
             "subinterfaces": bool(getattr(args, "subinterfaces", False)), "dp": getattr(args, "dp", None),
             "capacity_dir": cfg.capacity_dir,
-            "paper": getattr(args, "paper", None) or getattr(cfg, "paper", "a4")}
+            "paper": getattr(args, "paper", None) or getattr(cfg, "paper", "a4"),
+            "format": getattr(args, "out_format", None) or getattr(cfg, "format", "pdf"),
+            "page_per_section": bool(getattr(args, "page_per_section", None) or getattr(cfg, "page_per_section", False))}
 
 
 def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: str, anon=None,
@@ -273,7 +275,9 @@ def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: s
                                                       "meta": {k: str(v) for k, v in ds.meta.items()},
                                                       "findings": findings}, indent=2) + "\n")
     (outdir / "findings.txt").write_text("".join(f"{f['level'].upper():8s} {f['area']}: {f['text']}\n" for f in findings))
-    log.info("report: %s", pdf)
+    fmt = ctx.settings.get("format", "pdf")
+    for f in ([pdf] if fmt in ("pdf", "both") else []) + ([pdf.with_suffix(".html")] if fmt in ("html", "both") else []):
+        log.info("report: %s", f)
     return findings
 
 
@@ -616,6 +620,12 @@ def main(argv=None) -> int:
                        help="core spike: minimum duration, e.g. 15m (default: config, 15m)")
         p.add_argument("--paper", choices=["a4", "letter", "legal"],
                        help="PDF page format: a4 (worldwide), letter or legal (North America) (default: config, a4)")
+        p.add_argument("--page-per-section", action="store_true", default=None,
+                       help="PDF: one long page per section (as tall as the section) instead of paper pages - "
+                            "for reading on screen (default: config, no)")
+        p.add_argument("--format", choices=["pdf", "html", "both"], dest="out_format",
+                       help="report output: pdf, html (one self-contained file, continuous instead of pages) or both "
+                            "(default: config, pdf)")
 
     if live:
         p = sub.add_parser("init", help="guided setup: paths, firewall, admin role/admin, API key, TLS pinning, permission test, cron")

@@ -17,6 +17,8 @@ Location: $PAN_NGFW_LOAD_CONFIG, else ~/.config/pan-ngfw-load/pan-ngfw-load.ini.
     spike_min_duration = 15m          # ... sustained at least this long
     capacity_dir = ~/.config/pan-ngfw-load/capacity  # where 'pan-ngfw-load capacity update' keeps the public data
     paper = a4                        # PDF page format: a4, letter, legal
+    format = pdf                      # report output: pdf, html (one self-contained file) or both
+    page_per_section = no             # PDF: one long page per section instead of paper pages
 
     [device fw01]
     host = 192.0.2.10                 # management IP or FQDN
@@ -50,6 +52,8 @@ DEFAULTS = {
     "spike_min_duration": "15m",
     "capacity_dir": "~/.config/pan-ngfw-load/capacity",
     "paper": "a4",
+    "format": "pdf",
+    "page_per_section": "no",
 }
 
 
@@ -100,6 +104,8 @@ class Config:
     spike_min_duration: float = 900.0
     capacity_dir: str = "~/.config/pan-ngfw-load/capacity"
     paper: str = "a4"
+    format: str = "pdf"
+    page_per_section: bool = False
     devices: dict[str, Device] = field(default_factory=dict)
     raw: configparser.ConfigParser | None = None
 
@@ -135,6 +141,8 @@ def load(path: Path | None = None) -> Config:
         spike_threshold=float(g.get("spike_threshold")), spike_min_duration=parse_duration(g.get("spike_min_duration")),
         capacity_dir=g.get("capacity_dir"),
         paper=g.get("paper").strip().lower(),
+        format=g.get("format").strip().lower(),
+        page_per_section=g.get("page_per_section").strip().lower() in ("yes", "true", "1", "on"),
         raw=cp,
     )
     for sec in cp.sections():
