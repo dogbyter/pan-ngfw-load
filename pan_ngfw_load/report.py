@@ -55,6 +55,9 @@ STY: dict = {
     "toc_title": ParagraphStyle("toct", parent=_ss["Heading1"], fontSize=15, leading=19, textColor=INK, spaceAfter=10),
     "find": ParagraphStyle("f", parent=_ss["BodyText"], fontSize=9, leading=12.5, textColor=INK, leftIndent=10),
 }
+# no single line of a paragraph alone at the bottom (orphan) or the top (widow) of a page
+for _k in ("body", "small", "find", "cell", "subtitle"):
+    STY[_k].allowWidows = STY[_k].allowOrphans = 0
 STY["h1p"] = ParagraphStyle("h1p", parent=STY["h1"])  # h1/h2 inside a part (one DP of the --all-dps document)
 STY["h2p"] = ParagraphStyle("h2p", parent=STY["h2"])
 OUTLINE_LEVEL = {"part": 0, "h1": 0, "h2": 1, "h3": 2, "h1p": 1, "h2p": 2}
