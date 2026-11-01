@@ -80,11 +80,7 @@ def build(ctx):
 
     bad = ic[ic.err_ppm >= ERR_NOTICE * 1e6]
     if not bad.empty:
-        out.append(ctx.p(
-            "<b>Receive errors</b> are frames the port received damaged (CRC, alignment, runts). More than a few per "
-            "million packets usually points to a cable, optic or the device on the other end - not to load."))
-        ctx.find("notice", "Interfaces", "Receive errors above 10 per million packets: " + ", ".join(
-            f"{r.interface} {r.rx_errors:,.0f} ({r.err_ppm:.1f}/M)" for r in bad.itertuples()) + ".")
+        out += _rx_errors(ctx, phys, bad)
     if up and ic.use_pct.notna().any() and ic.use_pct.max() >= 1:
         hi = ic.sort_values("use_pct", ascending=False).iloc[0]
         ctx.find("info", "Interfaces", f"Busiest port on average since boot: {hi.interface} "
@@ -96,6 +92,63 @@ def build(ctx):
     if ds.has("if_counters_nodes"):
         out += _node_shares(ctx, phys.interface)
     return out
+
+
+TAG_ERR = "flow_rcv_dot1q_tag_err"  # 'Packets dropped: 802.1q tag not configured'
+TAG_ALL, TAG_PART = 0.9, 0.1  # share of the ports' receive errors this counter explains: all / a part
+
+
+def _rx_errors(ctx, phys: pd.DataFrame, bad: pd.DataFrame) -> list:
+    """Receive errors: frames with a VLAN tag that has no sub-interface are counted as receive errors as well. When
+    the global counter for them matches the ports' receive errors, that is the cause - not cable or optic."""
+    ds = ctx.ds
+    c = ds["counters_boot"].set_index("name").value if ds.has("counters_boot") else pd.Series(dtype=float)
+    tag = float(c.get(TAG_ERR, 0) or 0)
+    total = float(phys.rx_errors.fillna(0).sum())
+    share = tag / total if total else 0
+    ports = ", ".join(f"{r.interface} {r.rx_errors:,.0f} ({r.err_ppm:.1f}/M)" for r in bad.itertuples())
+    physical = ("Frames the port received damaged (CRC, alignment, runts) count as receive errors; more than a few "
+                "per million packets usually points to a cable, optic or the device on the other end - not to load.")
+    if share < TAG_PART:
+        ctx.find("notice", "Interfaces", f"Receive errors above 10 per million packets: {ports}.")
+        return [ctx.p(f"<b>Receive errors:</b> {physical}")]
+
+    # which VLANs the affected ports (or their aggregate groups) have
+    ae = dict(zip(ds["ae_members"].interface, ds["ae_members"].ae)) if ds.has("ae_members") else {}
+    lg = ds["if_logical"] if ds.has("if_logical") else pd.DataFrame(columns=["interface", "tag"])
+    groups = {}  # aggregate group (or the port itself) -> affected ports
+    for r in bad.itertuples():
+        groups.setdefault(ae.get(r.interface, r.interface), []).append(r.interface)
+    where = []
+    for parent, ports_ in groups.items():
+        tags = pd.to_numeric(lg[lg.interface.str.startswith(parent + ".")].tag, errors="coerce").dropna()
+        vl = ", ".join(str(int(t)) for t in sorted(set(tags)) if t > 0)
+        many = len(ports_) > 1
+        where.append(" and ".join(ports_) + (f" (member{'s' if many else ''} of {parent})" if parent not in ports_ else "")
+                     + (f" carr{'y' if many else 'ies'} VLANs {vl}" if vl else
+                        f" ha{'ve' if many else 's'} no VLAN sub-interfaces"))
+    in_ae = any(p not in ps for p, ps in groups.items())
+    fix = ("The switch sends a VLAN on this link that the firewall has no sub-interface for - usually flooded "
+           "broadcast/multicast of a VLAN that is allowed on the switch trunk. Remove the VLAN from the trunk (allowed "
+           "VLAN list of the port or port-channel) or, if the firewall should see it, add a sub-interface. A packet "
+           "capture at the drop stage on the port shows the VLAN tag."
+           + (" In an aggregate group the flooded frames usually leave the switch on one member, which is why one "
+              "member can collect most of the errors." if in_ae else ""))
+    if share >= TAG_ALL:
+        ctx.find("notice", "Interfaces", f"Receive errors above 10 per million packets: {ports} - these are frames with "
+                                         f"a VLAN tag that has no sub-interface on the firewall ({TAG_ERR} "
+                                         f"{tag:,.0f}), not a cable or optic problem; remove the VLAN from the switch "
+                                         "trunk.")
+        return [ctx.p(f"<b>Receive errors - unconfigured VLAN:</b> the global counter <i>{TAG_ERR}</i> ('802.1q tag "
+                      f"not configured') stands at {tag:,.0f}, {share * 100:.0f}% of the receive errors of all ports "
+                      f"({total:,.0f}). So the errors are tagged frames for a VLAN the firewall doesn't have, not damaged "
+                      f"frames. {'; '.join(where)}. {fix}")]
+    ctx.find("notice", "Interfaces", f"Receive errors above 10 per million packets: {ports} - about "
+                                     f"{share * 100:.0f}% of them are frames with an unconfigured VLAN tag ({TAG_ERR}), "
+                                     "the rest damaged frames (cable, optic, peer).")
+    return [ctx.p(f"<b>Receive errors - two causes:</b> about {share * 100:.0f}% of the receive errors of all ports are "
+                  f"frames with a VLAN tag the firewall has no sub-interface for (<i>{TAG_ERR}</i> {tag:,.0f}). "
+                  f"{'; '.join(where)}. {fix} The rest are damaged frames: {physical}")]
 
 
 def _node_shares(ctx, ports) -> list:
