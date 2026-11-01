@@ -58,17 +58,17 @@ def build(ctx):
     ic["zone"] = ic.interface.map(_zone_of(ds))
     show = ic[["interface", "zone", "speed", "rx_bytes", "tx_bytes"] + (["rx_mbps", "tx_mbps", "use_pct"] if up else [])
               + ["pkt", "rx_errors", "err_ppm"]].rename(columns={
-                  "speed": "link", "rx_bytes": "received", "tx_bytes": "sent", "rx_mbps": "avg in Mb/s",
-                  "tx_mbps": "avg out Mb/s", "use_pct": "avg use", "pkt": "avg pkt", "rx_errors": "rx errors",
-                  "err_ppm": "err / M pkts"})
+                  "speed": "link", "rx_bytes": "received", "tx_bytes": "sent", "rx_mbps": "avg in<br/>Mb/s",
+                  "tx_mbps": "avg out<br/>Mb/s", "use_pct": "avg use", "pkt": "avg pkt", "rx_errors": "rx errors",
+                  "err_ppm": "err ppm"})
     fmt = {"link": lambda v: "-" if pd.isna(v) else (f"{v / 1000:g}G" if v >= 1000 else f"{v:g}M"),
            "received": lambda v: C.human(v) + "B", "sent": lambda v: C.human(v) + "B",
-           "avg in Mb/s": lambda v: f"{v:,.0f}", "avg out Mb/s": lambda v: f"{v:,.0f}",
+           "avg in<br/>Mb/s": lambda v: f"{v:,.0f}", "avg out<br/>Mb/s": lambda v: f"{v:,.0f}",
            "avg use": lambda v: "-" if pd.isna(v) else f"{v:.1f}%", "avg pkt": lambda v: "-" if pd.isna(v) else f"{v:,.0f} B",
-           "rx errors": lambda v: f"{v:,.0f}", "errors / M pkts": lambda v: "-" if pd.isna(v) else f"{v:.2f}"}
-    widths = [2.0, 2.3, 1.0, 1.4, 1.4] + ([1.6, 1.6, 1.2] if up else []) + [1.1, 1.3, 1.1]  # widened where needed
+           "rx errors": lambda v: f"{v:,.0f}", "err ppm": lambda v: "-" if pd.isna(v) else f"{v:.2f}"}
+    widths = [1.9, 2.2, 1.0, 1.4, 1.3] + ([1.5, 1.5, 1.2] if up else []) + [1.1, 1.3, 1.1]  # widened where needed
     out.append(ctx.table(show, widths, fmt=fmt))
-    out.append(ctx.small("<b>zone</b>: the security zone of the port itself; <i>in aeN</i> = member of an aggregate "
+    out.append(ctx.small("<b>err ppm</b>: receive errors per million received packets. <b>zone</b>: the security zone of the port itself; <i>in aeN</i> = member of an aggregate "
                          "group (the zone is on the group or its sub-interfaces); <i>sub-interfaces</i> = the zones "
                          "are on the port's VLAN sub-interfaces" + (" (see 'Sub-interfaces' below)" if want_sub else
                                                                   " (--subinterfaces lists them)") + "."))
@@ -305,22 +305,24 @@ def _subinterfaces(ctx, allc: pd.DataFrame, up: float | None) -> list:
            ["pkt", "drops", "drop_ppm", "arp_not_found", "flow_state_drops"]
     tab = sc[cols].rename(columns={"rx_bytes": "received", "tx_bytes": "sent", "rx_mbps": "avg in Mb/s",
                                    "tx_mbps": "avg out Mb/s",
-                                   "pkt": "avg pkt in", "drops": "dropped", "drop_ppm": "dropped / M pkts",
-                                   "arp_not_found": "ARP not found", "flow_state_drops": "flow state drops"})
+                                   "pkt": "avg pkt", "drops": "dropped", "drop_ppm": "drop ppm",
+                                   "arp_not_found": "no ARP", "flow_state_drops": "state drops"})
     num = lambda v: f"{v:,.0f}"
     fmt = {"received": lambda v: C.human(v) + "B", "sent": lambda v: C.human(v) + "B",
            "avg in Mb/s": lambda v: f"{v:,.1f}", "avg out Mb/s": lambda v: f"{v:,.1f}",
-           "avg pkt in": lambda v: "-" if pd.isna(v) else f"{v:,.0f} B", "dropped": num,
-           "dropped / M pkts": lambda v: "-" if pd.isna(v) else f"{v:,.0f}", "ARP not found": num,
-           "flow state drops": num}
+           "avg pkt": lambda v: "-" if pd.isna(v) else f"{v:,.0f} B", "dropped": num,
+           "drop ppm": lambda v: "-" if pd.isna(v) else f"{v:,.0f}", "no ARP": num,
+           "state drops": num}
     widths = [2.6, 1.6, 1.6] + ([1.7, 1.7] if up else []) + [1.5, 1.7, 1.8, 1.7, 1.7]
     out.append(ctx.small("Traffic and drops since boot (averages spread over the whole uptime):"))
     out.append(ctx.table(tab, widths, fmt=fmt, max_rows=200))
     out.append(ctx.p(
+        "<b>avg pkt</b>: average size of the received packets. "
         "<b>dropped</b> counts every packet discarded after entering through this interface, for any reason - "
-        "including policy denies, so internet-facing interfaces always show many. <b>ARP not found</b>: packets to "
+        "including policy denies, so internet-facing interfaces always show many; <b>drop ppm</b>: dropped per "
+        "million received packets. <b>no ARP</b>: packets to "
         "addresses in this subnet that never answered ARP - scans of unused addresses or hosts that are down. "
-        "<b>flow state drops</b>: TCP packets that don't fit the state of their session (e.g. after a timeout or with "
+        "<b>state drops</b>: TCP packets that don't fit the state of their session (e.g. after a timeout or with "
         "asymmetric routing)."))
 
     # --- charts ----------------------------------------------------------------------------

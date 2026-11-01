@@ -122,14 +122,17 @@ class Ctx:
         items.append(Spacer(1, 6))
         return KeepTogether(items)
 
-    def table(self, df: pd.DataFrame, col_widths: list[float] | None = None, max_rows: int = 40, fmt: dict | None = None):
+    def table(self, df: pd.DataFrame, col_widths: list[float] | None = None, max_rows: int = 40, fmt: dict | None = None,
+              whole_headers: bool = True):
+        """whole_headers: header lines are never wrapped (the column is widened instead); an explicit '<br/>' marks
+        where a header may break, and a unit 'Mb/s' at the end of a header goes to its own line."""
         fmt = fmt or {}
         df = df.head(max_rows)
-        data = [[Paragraph(f"<b>{c}</b>", STY["cell"]) for c in df.columns]]
+        heads = [re.sub(r"\s+(Mb/s)$", r"<br/>\1", str(c)) if whole_headers and "<br/>" not in str(c) else str(c)
+                 for c in df.columns]
         texts = [[] for _ in df.columns]  # cell texts per column, to size the columns
         for _, r in df.iterrows():
-            row = []
-            for c in df.columns:
+            for j, c in enumerate(df.columns):
                 v = r[c]
                 if c in fmt:
                     v = fmt[c](v)
@@ -137,21 +140,32 @@ class Ctx:
                     v = f"{v:,.2f}"
                 elif isinstance(v, (pd.Timestamp, datetime)):
                     v = v.strftime("%Y-%m-%d %H:%M")
-                row.append(Paragraph(str(v), STY["cell"]))
-                texts[len(row) - 1].append(str(v))
-            data.append(row)
-        widths = _fit_columns([str(c) for c in df.columns], texts, col_widths) if col_widths else None
+                texts[j].append(str(v))
+        widths = _fit_columns(heads, texts, col_widths, whole_headers) if col_widths else None
+        # still wider than the page: shrink font, widths and padding together - by at most TABLE_SHRINK, below
+        # that the table keeps its size and wraps (smaller text would be hard to read)
+        sty, f = STY["cell"], 1.0
+        room = content_cm(self.page)
+        if widths and sum(widths) > room and room / sum(widths) >= 1 - TABLE_SHRINK:
+            f = room / sum(widths)
+            sty = ParagraphStyle(f"cell{f:.3f}", parent=STY["cell"], fontSize=STY["cell"].fontSize * f,
+                                 leading=STY["cell"].leading * f)
+            widths = [w * f for w in widths]
+        data = [[Paragraph(f"<b>{h}</b>", sty) for h in heads]]
+        data += [[Paragraph(texts[j][i], sty) for j in range(len(heads))] for i in range(len(df))]
         t = Table(data, colWidths=[w * cm for w in widths] if widths else None, repeatRows=1, hAlign="LEFT")
         t.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), HEAD_BG),
             ("LINEBELOW", (0, 0), (-1, -1), 0.4, RULE),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("LEFTPADDING", (0, 0), (-1, -1), CELL_PAD / 2 * f), ("RIGHTPADDING", (0, 0), (-1, -1), CELL_PAD / 2 * f),
         ]))
         return t
 
 
-CELL_PAD = 12  # points: reportlab's default left + right cell padding
+CELL_PAD = 8  # points: left + right cell padding (4 + 4, set in the table style)
+TABLE_SHRINK = 0.10  # a table wider than the page may shrink by up to this share
 
 
 SHORT_CELL = 18  # characters: values up to this length (numbers, numbers with a unit) are kept on one line
@@ -161,7 +175,7 @@ def _plain(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text).replace("&nbsp;", " ")
 
 
-def _fit_columns(headers: list[str], cells: list[list[str]], widths: list[float]) -> list[float]:
+def _fit_columns(headers: list[str], cells: list[list[str]], widths: list[float], whole_headers: bool = False) -> list[float]:
     """Widen columns so that no header word and no short value (number, number with unit) is split over two lines,
     and take the space from the columns with the most room (usually free text that can wrap), so the table keeps its
     total width."""
@@ -169,14 +183,15 @@ def _fit_columns(headers: list[str], cells: list[list[str]], widths: list[float]
     fs = STY["cell"].fontSize
     need = []
     for h, col in zip(headers, cells + [[]] * (len(headers) - len(cells))):
-        n = max(stringWidth(w, "Helvetica-Bold", fs) for w in h.split() or [""])
+        parts = h.split("<br/>") if whole_headers else h.split()  # whole lines, or single words
+        n = max(stringWidth(_plain(w).strip(), "Helvetica-Bold", fs) for w in parts or [""])
         for t in col:
             t = _plain(t).strip()
             if not t:
                 continue
             n = max(n, stringWidth(t, "Helvetica", fs) if len(t) <= SHORT_CELL else
                     max(stringWidth(w, "Helvetica", fs) for w in t.split()))
-        need.append((n + CELL_PAD + 4) / cm)
+        need.append((n + CELL_PAD + 1) / cm)
     extra = sum(max(0.0, n - w) for n, w in zip(need, widths))
     if extra <= 0:
         return widths
