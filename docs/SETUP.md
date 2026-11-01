@@ -143,7 +143,7 @@ Re-run it at any time: `pan-ngfw-load init --device <name>` keeps existing value
 ```
 
 - `pan-ngfw-load cron` prints the block with real paths, `pan-ngfw-load cron --install` adds or replaces it, and `pan-ngfw-load cron --remove` removes it. Other crontab lines are left alone.
-- **Once an hour** a sample also reads the state that changes rarely: SSL proxy settings and certificate cache, decryption exclusion cache, the running decryption rules, the job list (to tell configuration commits from content updates) and, with the diag key, the TLS statistics. These feed the *TLS and Decryption* section.
+- **Once an hour** a sample also reads the state that changes rarely or is counted since boot: SSL proxy settings and certificate cache, decryption exclusion cache, the job list (to tell configuration commits from content updates), interfaces and their counters, LACP, IPsec tunnels and SAs, the running security/NAT/PBF/decryption rules, ARP/neighbor/MAC/route tables, User-ID and registered-IP counts, GlobalProtect users, HA state, sensors, disk space, software status and, with the diag key, the TLS statistics. These feed the *Interfaces*, *IPsec VPN*, *TLS and Decryption*, *Configuration against model limits* and *Health and stability* sections. All of them are read-only `show` commands (about 40 KB per hour, compressed).
 - The **sample interval is not set in cron.** `tick` runs every minute and samples a device only when its `sample_interval` has passed, so each device can have its own interval.
 - Overlapping runs are skipped through per-device lock files, so a slow log export never piles up.
 - All output goes to `<data_dir>/pan-ngfw-load.log` (rotated, 3 × 5 MB).

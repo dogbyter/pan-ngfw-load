@@ -49,6 +49,7 @@ STY: dict = {
 STY["h1p"] = ParagraphStyle("h1p", parent=STY["h1"])  # h1/h2 inside a part (one DP of the --all-dps document)
 STY["h2p"] = ParagraphStyle("h2p", parent=STY["h2"])
 OUTLINE_LEVEL = {"part": 0, "h1": 0, "h2": 1, "h3": 2, "h1p": 1, "h2p": 2}
+OUTLINE_STYLES = {"part", "h1", "h1p"}  # the PDF bookmarks list the main sections (and in parts their sections)
 
 
 @dataclass
@@ -342,7 +343,8 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
             key = f"sec{counter['n']}"
             top = doc.frame._y + getattr(f, "height", 0) + 6  # jump to the heading, not just the page
             doc.canv.bookmarkPage(key, fit="XYZ", left=0, top=top)
-            doc.canv.addOutlineEntry(text, key, level=level, closed=level == 0)
+            if f.style.name in OUTLINE_STYLES:  # PDF bookmarks: main sections only (sub-headings stay link targets)
+                doc.canv.addOutlineEntry(text, key, level=level, closed=f.style.name == "part")
             if level == 0 and text != "Summary of findings":  # contents page: main sections only
                 doc.notify("TOCEntry", (level, text, doc.page, key))
             if layout_log is not None:

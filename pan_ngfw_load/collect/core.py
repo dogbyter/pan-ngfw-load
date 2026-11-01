@@ -33,13 +33,38 @@ SAMPLE_CMDS = {
     "system_resources": "show system resources",
 }
 
-# slower pass (once an hour, with a sample): state that changes rarely - SSL proxy, decryption rules, job history
+# slower pass (once an hour, with a sample): state that changes rarely or totals since boot - SSL proxy,
+# decryption rules, job history, interfaces, VPN, rules and tables against the model limits, health.
+# A value starting with '<' is sent as XML as it is (the API wants 'all' as a value there); a tuple lists
+# alternatives - the first one the firewall accepts is stored (e.g. advanced vs. legacy routing engine).
 INVENTORY_CMDS = {
     "decrypt_setting": "show system setting ssl-decrypt setting",
     "decrypt_memory": "show system setting ssl-decrypt memory",
     "decrypt_exclude": "show system setting ssl-decrypt exclude-cache",
     "decryption_policy": "show running decryption-policy",
     "jobs": "show jobs all",
+    # Interfaces, IPsec VPN
+    "interface_all": "<show><interface>all</interface></show>",
+    "counter_interface": "<show><counter><interface>all</interface></counter></show>",
+    "lacp": "<show><lacp><aggregate-ethernet>all</aggregate-ethernet></lacp></show>",
+    "vpn_flow": "show vpn flow",
+    "vpn_ipsec_sa": "show vpn ipsec-sa",
+    # Configuration against model limits
+    "security_policy": "show running security-policy",
+    "nat_policy": "show running nat-policy",
+    "pbf_policy": "show running pbf-policy",
+    "arp": "<show><arp><entry name='all'/></arp></show>",
+    "neighbor": "<show><neighbor><interface></interface></neighbor></show>",
+    "mac": "<show><mac>all</mac></show>",
+    "fib": ("show advanced-routing fib", "show routing fib"),
+    "userid_count": "<show><user><ip-user-mapping-mp><all><option>count</option></all></ip-user-mapping-mp></user></show>",
+    "registered_ip": "show object registered-ip all",
+    "gp_stats": "show global-protect-gateway statistics",
+    # Health and stability
+    "ha": "show high-availability all",
+    "environmentals": "show system environmentals",
+    "disk_space": "show system disk-space",
+    "software_status": "show system software status",
 }
 INVENTORY_INTERVAL = 3600  # seconds
 
@@ -137,11 +162,17 @@ def take_sample(cfg: Config, dev: Device, api: Api, diag: Api | None) -> tuple[P
     st = load_state(ddir)
     last_inv = st.get("last_inventory")
     if last_inv is None or (ts - datetime.fromisoformat(last_inv)).total_seconds() >= INVENTORY_INTERVAL - 60:
-        for stem, cli in INVENTORY_CMDS.items():
-            try:
-                save_xml(d / f"{stem}.xml", api.op_cli(cli), compress=True)
-            except ApiError as e:
-                errors.append(f"{stem}: {e}")
+        for stem, cmd in INVENTORY_CMDS.items():
+            last_err = None
+            for c in (cmd if isinstance(cmd, tuple) else (cmd,)):
+                try:
+                    save_xml(d / f"{stem}.xml", api.op(c) if c.startswith("<") else api.op_cli(c), compress=True)
+                    last_err = None
+                    break
+                except ApiError as e:
+                    last_err = e
+            if last_err is not None:
+                errors.append(f"{stem}: {last_err}")
         if diag is not None:
             try:
                 save_xml(d / "ssl_stats.xml", diag.op(SSL_STATS_XML), compress=True)

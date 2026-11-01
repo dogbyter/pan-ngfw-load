@@ -38,7 +38,7 @@ The report goes to `~/pan-ngfw-load/reports/<hostname>/tsf_<file>/`:
 
 | File | Content |
 |---|---|
-| `<hostname>_tsf_<file>.pdf` | the report - summary of findings, a contents page with links to the sections (sections and sub-headings also as PDF bookmarks), the sections, appendix |
+| `<hostname>_tsf_<file>.pdf` | the report - summary of findings, a contents page with links to the sections (also as PDF bookmarks), the sections, appendix |
 | `findings.txt`, `findings.json` | the summary of findings (info / notice / warning) |
 | `charts/*.png` | every chart of the report |
 | `data/*.csv` | every table behind the report, for your own analysis |
@@ -160,7 +160,7 @@ pan-ngfw-load test
 | hourly | `pan-ngfw-load logs` | exports new traffic logs (incremental) |
 | daily 06:15 | `pan-ngfw-load report && pan-ngfw-load prune` | report for the last 7 days into `report_dir/<device>/latest/`, then retention clean-up |
 
-`pan-ngfw-load cron` prints the block and `pan-ngfw-load cron --install` installs it. For systemd timers see `contrib/systemd/`. Live reports have the same sections as TSF reports plus *Traffic logs - who generates the load*; `-a` and `-x` work the same way. Health, interfaces, the IPsec overview and the session list need data that only a TSF contains - in live reports those parts are shorter or left out.
+`pan-ngfw-load cron` prints the block and `pan-ngfw-load cron --install` installs it. For systemd timers see `contrib/systemd/`. Live reports have the same sections as TSF reports plus *Traffic logs - who generates the load*; `-a` and `-x` work the same way. Once an hour the collector also reads interfaces, IPsec VPN, rules and tables against the model limits, health and the SSL proxy state, so live reports have these sections too. What needs the configuration or files only a TSF contains - object counts (addresses, zones, ...), aggregate members from the configuration, crash reports, the session list - stays TSF-only.
 
 Live-mode requirements: cron (or systemd timers), HTTPS from this host to the firewall's management IP, one admin account with a restricted role (`pan-ngfw-load init` explains it), and about 4 MB/day of samples plus ~3 MB/day of traffic logs per firewall (at ~6,000 logs/h).
 

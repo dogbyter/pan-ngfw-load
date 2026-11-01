@@ -119,7 +119,10 @@ def _dir_time(name: str) -> datetime | None:
         return None
 
 
-INVENTORY = ("decrypt_setting", "decrypt_memory", "decrypt_exclude", "decryption_policy", "jobs", "ssl_stats")
+INVENTORY = ("decrypt_setting", "decrypt_memory", "decrypt_exclude", "decryption_policy", "jobs", "ssl_stats",
+             "interface_all", "counter_interface", "lacp", "vpn_flow", "vpn_ipsec_sa", "security_policy", "nat_policy",
+             "pbf_policy", "arp", "neighbor", "mac", "fib", "userid_count", "registered_ip", "gp_stats", "ha",
+             "environmentals", "disk_space", "software_status")
 
 
 def _text(elem: ET.Element) -> str:
@@ -142,8 +145,136 @@ def commits_xml(r: ET.Element) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["ts", "job", "kind"]).sort_values("ts").reset_index(drop=True)
 
 
+# --- XML forms of the TSF tables (the API returns these commands as structured XML, not as CLI text) ---------
+def _int(x) -> float:
+    try:
+        return float(str(x).strip())
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def interfaces_xml(r: ET.Element) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    """'show interface all' -> (if_hw, if_logical, device IP addresses) like simple.interface_hw / interface_logical
+    and anonymize.interface_ips."""
+    hw = []
+    for e in r.findall("hw/entry"):
+        parts = (e.findtext("st") or "").split("/")  # speed/duplex/state(...)
+        if len(parts) >= 3:
+            hw.append(dict(interface=e.findtext("name"), speed=_int(parts[0]), duplex=parts[1],
+                           state=parts[2].split("(")[0]))
+    lg, ips = [], []
+    for e in r.findall("ifnet/entry"):
+        addrs = [a.text.strip() for a in e.iter("member") if a.text and a.text.strip()]
+        ip = (e.findtext("ip") or "").strip()
+        if ip and ip != "N/A":
+            addrs.insert(0, ip)
+        lg.append(dict(interface=e.findtext("name"), zone=e.findtext("zone") or "", router=e.findtext("fwd") or "",
+                       tag=e.findtext("tag") or "0", address=", ".join(dict.fromkeys(addrs))))
+        ips += [a.split("/")[0] for a in addrs if "/" in a or ":" in a]
+    return (pd.DataFrame(hw, columns=["interface", "speed", "duplex", "state"]),
+            pd.DataFrame(lg, columns=["interface", "zone", "router", "tag", "address"]), list(dict.fromkeys(ips)))
+
+
+HW_CNT = {"ibytes": "rx_bytes", "obytes": "tx_bytes", "ipackets": "rx_pkts", "opackets": "tx_pkts",
+          "ierrors": "rx_errors", "idrops": "rx_discards"}
+LG_CNT = {"ibytes": "rx_bytes", "obytes": "tx_bytes", "ipackets": "rx_pkts", "opackets": "tx_pkts",
+          "ierrors": "rx_errors", "idrops": "drops", "flowstate": "flow_state_drops", "ifwderrors": "fwd_errors",
+          "noroute": "no_route", "noarp": "arp_not_found", "noneigh": "neighbor_not_found", "nomac": "mac_not_found"}
+
+
+def interface_counters_xml(r: ET.Element) -> pd.DataFrame:
+    """'show counter interface all' -> like simple.interface_counters: hardware counters first (physical ports),
+    the logical counters fill the rest and cover sub-interfaces, tunnels, VLANs."""
+    rows = {}
+    for path, mp in (("hw/entry", HW_CNT), ("ifnet/ifnet/entry", LG_CNT), ("ifnet/entry", LG_CNT)):
+        for e in r.findall(path):
+            row = rows.setdefault(e.findtext("name"), {"interface": e.findtext("name")})
+            for tag, col in mp.items():
+                if col not in row and e.findtext(tag) is not None:
+                    row[col] = _int(e.findtext(tag))
+    return pd.DataFrame(list(rows.values()), columns=["interface", *simple.IF_COUNTERS.values()])
+
+
+def _first(e: ET.Element, *tags) -> str:
+    for t in tags:
+        v = e.findtext(t)
+        if v:
+            return v.strip()
+    return ""
+
+
+def vpn_flow_xml(r: ET.Element) -> pd.DataFrame:
+    """'show vpn flow' -> tunnel_id, name, state, local, peer (field names as PAN-OS commonly uses them)."""
+    rows = [dict(tunnel_id=int(_int(_first(e, "id", "tunnel-id")) or 0), name=_first(e, "name"),
+                 state=_first(e, "state"), local=_first(e, "localip", "local-ip", "local"),
+                 peer=_first(e, "peerip", "peer-ip", "peer"))
+            for e in r.findall("IPSec/entry")]
+    return pd.DataFrame(rows, columns=["tunnel_id", "name", "state", "local", "peer"])
+
+
+def ipsec_sa_xml(r: ET.Element) -> pd.DataFrame:
+    """'show vpn ipsec-sa' -> tunnel_id, algorithm (e.g. ESP/G256)."""
+    rows = []
+    for e in r.findall("entries/entry"):
+        alg = "/".join(x for x in (_first(e, "proto", "protocol"), _first(e, "enc", "encryption"),
+                                   _first(e, "hash", "authentication")) if x)
+        rows.append(dict(tunnel_id=int(_int(_first(e, "tid", "tunnel-id", "id")) or 0), algorithm=alg))
+    return pd.DataFrame(rows, columns=["tunnel_id", "algorithm"])
+
+
+def ha_xml(r: ET.Element) -> pd.DataFrame:
+    """'show high-availability all' -> key/value rows like simple.ha_status."""
+    if (r.findtext("enabled") or "").strip() != "yes":
+        return pd.DataFrame([("enabled", "no")], columns=["key", "value"])
+    g = r.find("group")
+    rows = [("enabled", "yes")]
+    if g is not None:
+        for key, paths in (("mode", ("mode",)), ("local state", ("local-info/state",)),
+                           ("peer state", ("peer-info/state",)),
+                           ("running configuration", ("running-sync",)),
+                           ("state synchronization", ("local-info/state-sync", "state-sync"))):
+            v = _first(g, *paths)
+            if v:
+                rows.append((key, v))
+    return pd.DataFrame(rows, columns=["key", "value"])
+
+
+def environmentals_xml(r: ET.Element) -> pd.DataFrame:
+    """'show system environmentals' -> kind, description, alarm, value, min, max like simple.environmentals."""
+    rows = []
+    for kind in r:
+        for e in kind.iter("entry"):
+            v = next((_int(e.findtext(t)) for t in ("DegreesC", "RPMs", "Volts", "value") if e.findtext(t)), np.nan)
+            rows.append(dict(kind=kind.tag.lower(), description=e.findtext("description") or "",
+                             alarm=(e.findtext("alarm") or "").strip() == "True", value=v,
+                             min=_int(e.findtext("min")), max=_int(e.findtext("max"))))
+    return pd.DataFrame(rows, columns=["kind", "description", "alarm", "value", "min", "max"])
+
+
+def scale_xml(get) -> pd.DataFrame:
+    """Rule counts and table sizes with the limits the firewall reports - like dataset._scale, without the object
+    counts that need the configuration."""
+    rows = []
+    for metric, stem in (("security_rules", "security_policy"), ("nat_rules", "nat_policy"),
+                         ("decryption_rules", "decryption_policy"), ("pbf_rules", "pbf_policy")):
+        if (r := get(stem)) is not None:
+            rows.append((metric, simple.running_rules(_text(r)), None, "rules in effect"))
+    for metric, stem in (("arp_entries", "arp"), ("ndp_entries", "neighbor"), ("mac_entries", "mac")):
+        if (r := get(stem)) is not None and r.findtext("total") is not None:
+            rows.append((metric, _int(r.findtext("total")), _int(r.findtext("max")), "table"))
+    if (r := get("fib")) is not None and r.findtext("total") is not None:
+        mx = [_int(x.text) for x in r.findall("fibs/entry/max")]
+        rows.append(("fib_total", _int(r.findtext("total")), max(mx) if mx else None, "table"))
+    for metric, stem, path in (("userid_mappings_mp", "userid_count", ".//count"),
+                               ("dag_ips", "registered_ip", ".//count"), ("gp_users", "gp_stats", "TotalCurrentUsers")):
+        if (r := get(stem)) is not None and r.findtext(path) is not None:
+            rows.append((metric, _int(r.findtext(path)), None, "runtime"))
+    return pd.DataFrame(rows, columns=["metric", "used", "device_limit", "source"])
+
+
 def inventory(files: dict[str, Path]) -> tuple[dict, dict]:
-    """Newest hourly files -> (meta, tables): SSL proxy state, exclusion cache, decryption rules, commits, TLS stats."""
+    """Newest hourly files -> (meta, tables): SSL proxy, decryption rules, commits, TLS stats, interfaces, VPN,
+    rules and tables against the model limits, health."""
     meta, t = {}, {}
     get = lambda stem: _xml(files[stem] / f"{stem}.xml") if stem in files else None
     if (r := get("decrypt_setting")) is not None:
@@ -152,13 +283,25 @@ def inventory(files: dict[str, Path]) -> tuple[dict, dict]:
             meta["decrypt"]["cert_cache_entries"] = simple.cert_cache_entries(_text(m))
     if (r := get("decrypt_exclude")) is not None:
         t["decrypt_exclude"] = simple.decrypt_exclude(_text(r))
-    if (r := get("decryption_policy")) is not None:
-        t["scale_used"] = pd.DataFrame([("decryption_rules", simple.running_rules(_text(r)), None, "rules in effect")],
-                                       columns=["metric", "used", "device_limit", "source"])
+    su = scale_xml(get)
+    if not su.empty:
+        t["scale_used"] = su
     if (r := get("jobs")) is not None:
         t["commits"] = commits_xml(r)
     if (r := get("ssl_stats")) is not None:
         t["tls_stats"] = simple.tls_stats(_text(r))
+    if (r := get("interface_all")) is not None:
+        t["if_hw"], t["if_logical"], meta["device_ips"] = interfaces_xml(r)
+    if (r := get("counter_interface")) is not None:
+        t["if_counters"] = interface_counters_xml(r)
+    for key, stem, fn in (("vpn_tunnels", "vpn_flow", vpn_flow_xml), ("vpn_sa", "vpn_ipsec_sa", ipsec_sa_xml),
+                          ("ha", "ha", ha_xml), ("environment", "environmentals", environmentals_xml)):
+        if (r := get(stem)) is not None:
+            t[key] = fn(r)
+    for key, stem, fn in (("disk", "disk_space", simple.disk_space), ("software", "software_status",
+                                                                      simple.software_status)):
+        if (r := get(stem)) is not None:
+            t[key] = fn(_text(r))
     return meta, t
 
 
