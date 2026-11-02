@@ -48,27 +48,27 @@ The findings are also printed in the terminal. The TSF is unpacked once into `~/
 
 ### What the report shows
 
-There are two report kinds. The **standard report** is the default; **`-x` / `--extended`** adds the sections marked *extended* for a deeper look. The standard report still checks those sections: their warnings and notices appear in its summary, marked in bold as analysed in detail only with `-x`.
+The report has all of these sections; a section is left out only when there is no data for it (e.g. Core spikes when no core spikes). Single sections: `-s` (see below).
 
-| Section | Answers | Report |
-|---|---|---|
-| Summary of findings | the key results on one page (info / notice / warning) | both |
-| Data coverage | which data the TSF holds and how far back each source reaches | both |
-| Dataplane CPU load | load per DP core: per week, per day, per hour (24 h) and per minute (~2 days), daily profile. More than 8 cores: the colours repeat with dashed/dotted lines and hatched bars; the extended report shows the field of all cores instead (median and lowest-highest range) and names only the cores that stand out | both |
-| Core spikes | *only when a core spikes*: which cores run above the others, when, and what changes meanwhile (traffic profile, counters, IPsec, per-core work, busiest tunnels) | both |
-| Dataplane resources | packet buffers, packet descriptors, software tag descriptors, session table: what each one is, how full it got (minute to 13 weeks), whether one ran out | both |
-| Drops and errors | all drop/error counters since boot, grouped by meaning (policy, network/config, TCP quality, inspection skipped, cloud lookups, resources), largest ones over time | extended |
-| What consumes dataplane CPU | DP CPU time by processing stage, work group, feature and function - since boot and over time | both |
-| Traffic that drives the load | packets, new sessions and sessions over time, how closely the load follows them, top applications since boot | both |
-| Interfaces | traffic per port since boot, average use of the link speed, receive errors per million packets; aggregate groups (ae) with their member ports, LACP state and how evenly the traffic is spread. With `--subinterfaces`: every sub-interface and VLAN interface with zone, VLAN, router, addresses, traffic and drops (this also adds the section to the standard report) | extended |
-| IPsec VPN | tunnels and their state, encryption (GCM vs CBC), traffic per tunnel interface, ESP rates over time, IPsec share of DP CPU | extended |
-| TLS and Decryption | whether the firewall decrypts and how much (decrypted, no-decrypt rule, no rule matched), decrypted sessions at the same time against the model's limit, what went wrong (out of proxy resources, certificates, unsupported TLS, TLS 1.3 errors), episodes of TLS/SSL failures with a possible cause (e.g. a configuration commit shortly before), TLS versions and ciphers, certificate cache, exclusions, and a conclusion - incl. the problem periods as a whole (per kind of problem, recurrence, busy times, whether configuration commits explain them more often than chance) - with what to check. Live reports add the decryption log (failures by reason, failing servers). The standard report shows the findings only | extended |
-| Sessions | session table use, TCP/UDP/ICMP mix over time, what the listed sessions are (applications, zone pairs, ports, NAT) | both |
-| Capacity | measured peaks against the model's limits, and how much more traffic the dataplane takes at the current mix before it reaches 80% | extended |
-| Configuration against model limits | rules in effect, objects, zones, routers, interfaces, VLAN tags, ARP/neighbor/MAC/route tables, tunnels, User-ID, sessions - each against its limit; limits the firewall reports itself come first, datasheet values from your capacity files | extended |
-| Management plane | MP CPU over 30 days, CPU split, processes with their meaning and over time, memory, MP network interfaces, load average | both |
-| Health and stability | last boot, crash reports, processes, HA pair, hardware sensors, disk space, lost logs | both |
-| Appendix | method and caveats | both |
+| Section | Answers |
+|---|---|
+| Summary of findings | the key results on one page (info / notice / warning) |
+| Data coverage | which data the TSF holds and how far back each source reaches |
+| Dataplane CPU load | load per DP core: per week, per day, per hour (24 h) and per minute (~2 days), daily profile. More than 8 cores: the charts show the field of all cores (median and lowest-highest range) and name only the cores that stand out |
+| Core spikes | *only when a core spikes*: which cores run above the others, when, and what changes meanwhile (traffic profile, counters, IPsec, per-core work, busiest tunnels) |
+| Dataplane resources | packet buffers, packet descriptors, software tag descriptors, session table: what each one is, how full it got (minute to 13 weeks), whether one ran out |
+| Drops and errors | all drop/error counters since boot, grouped by meaning (policy, network/config, TCP quality, inspection skipped, cloud lookups, resources), largest ones over time |
+| What consumes dataplane CPU | DP CPU time by processing stage, work group, feature and function - since boot and over time |
+| Traffic that drives the load | packets, new sessions and sessions over time, how closely the load follows them, top applications since boot |
+| Interfaces | traffic per port since boot, average use of the link speed, receive errors per million packets; aggregate groups (ae) with their member ports, LACP state and how evenly the traffic is spread. With `--subinterfaces`: every sub-interface and VLAN interface with zone, VLAN, router, addresses, traffic and drops |
+| IPsec VPN | tunnels and their state, encryption (GCM vs CBC), traffic per tunnel interface, ESP rates over time, IPsec share of DP CPU |
+| TLS and Decryption | whether the firewall decrypts and how much (decrypted, no-decrypt rule, no rule matched), decrypted sessions at the same time against the model's limit, what went wrong (out of proxy resources, certificates, unsupported TLS, TLS 1.3 errors), episodes of TLS/SSL failures with a possible cause (e.g. a configuration commit shortly before), TLS versions and ciphers, certificate cache, exclusions, and a conclusion - incl. the problem periods as a whole (per kind of problem, recurrence, busy times, whether configuration commits explain them more often than chance) - with what to check. Live reports add the decryption log (failures by reason, failing servers) |
+| Sessions | session table use, TCP/UDP/ICMP mix over time, what the listed sessions are (applications, zone pairs, ports, NAT) |
+| Capacity | measured peaks against the model's limits, and how much more traffic the dataplane takes at the current mix before it reaches 80% |
+| Configuration against model limits | rules in effect, objects, zones, routers, interfaces, VLAN tags, ARP/neighbor/MAC/route tables, tunnels, User-ID, sessions - each against its limit; limits the firewall reports itself come first, datasheet values from your capacity files |
+| Management plane | MP CPU over 30 days, CPU split, processes with their meaning and over time, memory, MP network interfaces, load average |
+| Health and stability | last boot, crash reports, processes, HA pair, hardware sensors, disk space, lost logs |
+| Appendix | method and caveats |
 
 ### How far back a TSF reaches
 
@@ -86,12 +86,11 @@ So the **longest DP history** is the weekly resource-monitor data (up to 13 week
 ### Options
 
 ```sh
-pan-ngfw-load tsf -x file.tgz                       # extended report
 pan-ngfw-load tsf --subinterfaces file.tgz          # + every sub-interface/VLAN interface in detail
 pan-ngfw-load tsf -a file.tgz                       # anonymized (see below)
 pan-ngfw-load tsf file.tgz -o /tmp/reports          # other output directory
 pan-ngfw-load tsf file.tgz -p dp                    # DP-only profile (no MP section)
-pan-ngfw-load tsf file.tgz -s dp_load,core_spikes   # only these sections
+pan-ngfw-load tsf file.tgz -s decryption,interfaces # only these sections (names below)
 pan-ngfw-load tsf file.tgz --spike-threshold 15 --spike-min-duration 30m
 pan-ngfw-load tsf extracted_dir/                    # an already unpacked TSF works too
 pan-ngfw-load tsf --paper letter file.tgz           # PDF in US Letter (a4 = default, letter, legal)
@@ -100,7 +99,29 @@ pan-ngfw-load tsf --page-per-section file.tgz       # PDF with one long page per
 pan-ngfw-load -h tsf                                # all options
 ```
 
-**Capacity and model limits (extended):** the firewall reports some limits itself (sessions, ARP/neighbor/MAC and route tables); those are always used. Everything else (throughput, connections per second, rule and object limits, ...) comes from the public product comparison on paloaltonetworks.com - it covers current and older models and is the only source of datasheet values:
+Section names for `-s` / `--sections` (also listed by `pan-ngfw-load -s list` and `pan-ngfw-load -h tsf`). A report with only some sections goes to its own folder, named after them (e.g. `tsf_<file>_decryption-interfaces`), so it never replaces the full report:
+
+| Name | Section |
+|---|---|
+| `coverage` | Data coverage - how far back can we look? |
+| `dp_load` | Dataplane CPU load |
+| `core_spikes` | Core spikes - single DP cores above the rest |
+| `dp_resources` | Dataplane resources - buffers, descriptors, session table |
+| `drops` | Drops and errors |
+| `dp_breakdown` | What consumes dataplane CPU |
+| `traffic` | Traffic that drives the load |
+| `interfaces` | Interfaces |
+| `vpn` | IPsec VPN |
+| `decryption` | TLS and Decryption |
+| `sessions` | Sessions |
+| `capacity` | Capacity - how much headroom is left |
+| `scale` | Configuration against model limits |
+| `mp` | Management plane - CPU, processes, memory |
+| `health` | Health and stability |
+| `logs` | Traffic logs - who generates the load (live reports only) |
+| `method` | Appendix - method and caveats |
+
+**Capacity and model limits:** the firewall reports some limits itself (sessions, ARP/neighbor/MAC and route tables); those are always used. Everything else (throughput, connections per second, rule and object limits, ...) comes from the public product comparison on paloaltonetworks.com - it covers current and older models and is the only source of datasheet values:
 
 ```sh
 pan-ngfw-load capacity update            # current values -> ~/.config/pan-ngfw-load/capacity/public-product-comparison.csv
@@ -164,7 +185,7 @@ pan-ngfw-load test
 | hourly | `pan-ngfw-load logs` | exports new traffic logs (incremental) |
 | daily 06:15 | `pan-ngfw-load report && pan-ngfw-load prune` | report for the last 7 days into `report_dir/<device>/latest/`, then retention clean-up |
 
-`pan-ngfw-load cron` prints the block and `pan-ngfw-load cron --install` installs it. For systemd timers see `contrib/systemd/`. Live reports have the same sections as TSF reports plus *Traffic logs - who generates the load*; `-a` and `-x` work the same way. Once an hour the collector also reads interfaces, IPsec VPN, rules and tables against the model limits, health and the SSL proxy state, so live reports have these sections too. What needs the configuration or files only a TSF contains - object counts (addresses, zones, ...), aggregate members from the configuration, crash reports, the session list - stays TSF-only.
+`pan-ngfw-load cron` prints the block and `pan-ngfw-load cron --install` installs it. For systemd timers see `contrib/systemd/`. Live reports have the same sections as TSF reports plus *Traffic logs - who generates the load*; `-a` and `-s` work the same way. Once an hour the collector also reads interfaces, IPsec VPN, rules and tables against the model limits, health and the SSL proxy state, so live reports have these sections too. What needs the configuration or files only a TSF contains - object counts (addresses, zones, ...), aggregate members from the configuration, crash reports, the session list - stays TSF-only.
 
 Live-mode requirements: cron (or systemd timers), HTTPS from this host to the firewall's management IP, one admin account with a restricted role (`pan-ngfw-load init` explains it), and about 4 MB/day of samples plus ~3 MB/day of traffic logs per firewall (at ~6,000 logs/h).
 

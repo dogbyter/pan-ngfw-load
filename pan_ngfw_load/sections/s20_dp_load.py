@@ -18,7 +18,7 @@ def build(ctx):
     cores = ds.meta.get("dp_cores") or []
     rc = ds["rm_cpu"][ds["rm_cpu"].core.isin(cores)]
     many = len(cores) > len(C.CAT)
-    field = many and ctx.settings.get("report_kind") == "extended"  # extended report: field + highlighted cores
+    field = many  # many cores: the field of all cores plus the cores that stand out
     sty = C.series_styles([f"core {c}" for c in cores])
     hl = 2.4 if many else 1.2  # legend handles long enough to show dashes
     intro = (f"DP worker cores: {', '.join(map(str, cores))}. Each value is a core's utilisation in %. "
@@ -29,15 +29,6 @@ def build(ctx):
                   "<b>median</b> (dark line or bar), the <b>range from the lowest to the highest core</b> (grey band or "
                   f"thin line), and in colour only the cores that differ most from the others (at most "
                   f"{C.FIELD_MAX_HIGHLIGHT}, and only if they differ by {C.FIELD_MIN_DEV:g} points or more on average).")
-    elif many:
-        rounds = (len(cores) - 1) // len(C.CAT) + 1
-        intro += (f" This firewall has {len(cores)} DP cores - more than the {len(C.CAT)} colours that can be told "
-                  "apart. The colours repeat: cores " + "; ".join(
-                      f"{cores[i * len(C.CAT)]}-{cores[min(len(cores), (i + 1) * len(C.CAT)) - 1]} "
-                      f"{C.ROUND_NAMES[i % len(C.ROUND_NAMES)]}" for i in range(rounds)) + ". "
-                  "<b>Tip:</b> run the report with <b>-x / --extended</b> for charts that show the field of all "
-                  "cores (median and range) and name only the cores that stand out - easier to read with many cores. The extended report also adds more analysis: drops and "
-                  "errors, interfaces, IPsec VPN and capacity.")
     hl_cores, hl_cmap = [], {}
     if field:  # the notable cores are chosen once, from the averages, and shown the same way in every chart
         if ds.has("dpm_minute"):
@@ -51,7 +42,7 @@ def build(ctx):
                                            "none - all cores stay close to the median") + ".")
     out = [ctx.h1(TITLE), ctx.p(intro)]
 
-    # --- weeks + days: grouped bars avg/max (field view for many cores in the extended report) ---------
+    # --- weeks + days: grouped bars avg/max (field view for many cores) ---------
     for step, label, unit in ((604800, "week", "Week"), (86400, "day", "Day")):
         sub = rc[rc.step_s == step].dropna(subset=["avg"])
         if sub.empty:

@@ -1,6 +1,5 @@
 """TLS and decryption: the SSL proxy - what it decrypts, how many sessions at once against the model's limit,
-what went wrong (resources, certificates, unsupported TLS), TLS versions and ciphers. The standard report only
-gets the findings; the pages are in the extended report."""
+what went wrong (resources, certificates, unsupported TLS), TLS versions and ciphers."""
 
 import re
 
@@ -11,7 +10,6 @@ from .. import capacity as CAP
 from .. import charts as C
 
 TITLE = "TLS and Decryption"
-EXTENDED_DETAIL = True  # standard report: findings only, flagged in the summary
 DP_SCOPED = "partly"  # chassis: the time series come from one DP (see dataset.select_dp)
 
 PEAK_NOTICE, PEAK_WARN = 70, 90  # % of the model's decryption session limit
@@ -109,7 +107,6 @@ def build(ctx):
     proxied = val("proxy_process") > 0 or tls["count"].sum() > 0
     if not decrypting and not proxied:
         return []
-    full = ctx.settings.get("report_kind") != "standard"  # the standard report gets the findings only
     model = ds.meta.get("model", "?")
     lim, _notes, _src, _status = CAP.limits(ctx.settings, model)
     lim_sess, lim_cache = lim.get("ssl_decrypt_sessions"), lim.get("other:ssl_decryption_ssl_certificate_cache")
@@ -125,7 +122,7 @@ def build(ctx):
     peak = fwd.max() if len(fwd) else np.nan
     peak_ts = fwd.idxmax() if len(fwd) else None
 
-    # --- findings (standard and extended) ---------------------------------------------------------------
+    # --- findings ---------------------------------------------------------------
     if not decrypting:
         ctx.find("info", "Decryption", f"No decryption configured; the SSL proxy handled {val('proxy_process'):,.0f} "
                                        "TLS sessions that the firewall terminates itself (e.g. GlobalProtect).", whole=True)
@@ -168,10 +165,8 @@ def build(ctx):
     if decrypting and ver.sum() and legacy / ver.sum() * 100 >= LEGACY_NOTICE:
         ctx.find("notice", "Decryption", f"{legacy / ver.sum() * 100:.1f}% of the decrypted client connections use "
                                          "TLS 1.1 or older.", whole=True)
-    if not full:
-        return []
 
-    # --- pages (extended report) -------------------------------------------------------------------------
+    # --- pages -------------------------------------------------------------------------
     out = [ctx.h1(TITLE), ctx.p(
         "The SSL proxy decrypts TLS sessions that match a decryption rule, so that App-ID, threat and URL inspection see "
         "the content. It costs CPU for the handshakes, memory per session and a certificate per server name, and the "

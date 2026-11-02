@@ -33,10 +33,12 @@ SECTIONS = {
     "method": s90_method,
 }
 
-STANDARD = ["coverage", "dp_compare", "dp_load", "core_spikes", "dp_resources", "dp_breakdown", "traffic", "sessions",
-            "decryption", "mp", "health", "logs", "method"]  # decryption: findings only, pages in the extended report
-EXTENDED_ONLY = {"drops", "interfaces", "vpn", "capacity", "scale"}  # added by --extended
-EXTENDED = ["coverage", "dp_compare", "dp_load", "core_spikes", "dp_resources", "drops", "dp_breakdown", "traffic", "interfaces",
+from ..section_names import NAMES, UNLISTED
+
+assert set(NAMES) | UNLISTED == set(SECTIONS), "section_names.NAMES out of date"
+assert all(NAMES[k].startswith(SECTIONS[k].TITLE) for k in NAMES), "section_names.NAMES: title changed"
+
+STANDARD = ["coverage", "dp_compare", "dp_load", "core_spikes", "dp_resources", "drops", "dp_breakdown", "traffic", "interfaces",
             "vpn", "decryption", "sessions", "capacity", "scale", "mp", "health", "logs", "method"]
 
 # Separate document with every DP of a chassis (--all-dps): the comparison, then these sections once per DP
@@ -46,10 +48,10 @@ ALL_DPS = ["dp_load", "core_spikes", "dp_resources", "dp_breakdown"]
 # busiest DP and its chassis; the others cover the whole cluster
 CLUSTER_PART = ["dp_load", "core_spikes", "dp_resources", "dp_breakdown", "health"]
 
-# Named section sets, selectable with --profile (--extended = profile 'extended')
+# Named section sets, selectable with --profile
 PROFILES = {
     "standard": STANDARD,
-    "extended": EXTENDED,
+    "extended": STANDARD,  # old name: the extended report is the standard report now
     "load": STANDARD,  # old name of 'standard'
     "dp": ["coverage", "dp_compare", "dp_load", "core_spikes", "dp_resources", "dp_breakdown", "traffic", "method"],
 }

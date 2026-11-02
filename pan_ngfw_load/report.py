@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import re
-import tempfile
 import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -82,9 +81,6 @@ class Ctx:
     _part_no: int = 0  # > 0 inside a part (--all-dps document)
     _label: str = ""  # DP the current section covers (chassis) - added to its findings
     _whole: str = "all DPs"  # label of findings about the whole firewall or node (find(..., whole=True))
-    _x_only: bool = False  # the section being built is analysed only in the extended report
-    x_only: set = field(default_factory=set)  # indices into findings: details only in the extended report
-    _silent: bool = False  # section built for its warnings and notices only (standard report, see build_pdf)
 
     @property
     def chartdir(self) -> Path:
@@ -110,10 +106,6 @@ class Ctx:
         finding is about the whole firewall although a DP section reports it (e.g. global counters)."""
         if self._label:
             section += f" ({self._whole})" if whole else f" ({self._label})"
-        if self._silent and level == "info":
-            return
-        if self._x_only:
-            self.x_only.add(len(self.findings))
         self.findings.append((level, section, text))
 
     @property
@@ -266,12 +258,10 @@ def keep_leads_with_content(items: list) -> list:
 
 
 def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list | None = None,
-              parts: list | None = None, select_dp=None, tail: list | None = None, silent: list | None = None) -> None:
+              parts: list | None = None, select_dp=None, tail: list | None = None) -> None:
     """sections: modules in report order. parts: one part per DP (--all-dps document) or per cluster node, after the
     sections - dicts {key, mods, title, sub, label, add_dp}; select_dp(key) loads that DP or node before its part is
-    built, select_dp(None) restores the report's own data before the tail. tail: modules after the parts.
-    silent: sections of the extended report built without pages (charts in a scratch directory) - only their warnings
-    and notices go into the summary, flagged as analysed in the extended report."""
+    built, select_dp(None) restores the report's own data before the tail. tail: modules after the parts."""
     meta = ctx.ds.meta
     body = []
     base_ds = ctx.ds
@@ -289,7 +279,6 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
         ctx._suffix = f" - DP {label}" if label and scope is True and not part else ""
         ctx._label = label or ""
         ctx._whole = f"{part['label']}, all DPs" if part and part.get("add_dp") else "all DPs"
-        ctx._x_only = bool(getattr(mod, "EXTENDED_DETAIL", False)) and ctx.settings.get("report_kind") == "standard"
         try:
             flow = mod.build(ctx)
         except Exception as e:  # a broken section must not kill the report
@@ -297,7 +286,6 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
             ctx.find("warning", mod.TITLE, f"section failed: {type(e).__name__}: {e}")
             flow = [ctx.h1(mod.TITLE), ctx.p(f"<font color='#d03b3b'>Section failed: {type(e).__name__}: {e}</font>")]
         ctx._label = ""
-        ctx._x_only = False
         if flow:
             body.extend(flow)
             body.append(PageBreak())
@@ -322,18 +310,6 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
     ctx._part_no, ctx._sec_no = 0, base + len(parts or [])
     for mod in tail or []:
         run(mod)
-    if silent:
-        sec_no, outdir = ctx._sec_no, ctx.outdir
-        with tempfile.TemporaryDirectory(prefix="pan-ngfw-load-") as tmp:
-            ctx.outdir, ctx._silent = Path(tmp), True
-            for mod in silent:
-                ctx._section, ctx._suffix, ctx._label, ctx._x_only = mod.TITLE, "", "", True
-                try:
-                    mod.build(ctx)
-                except Exception:  # the section is not in this report - a failure only costs its findings
-                    traceback.print_exc()
-                plt.close("all")
-        ctx.outdir, ctx._silent, ctx._x_only, ctx._sec_no = outdir, False, False, sec_no
 
     front = [
         Paragraph(title, STY["title"]),
@@ -346,8 +322,7 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
                   f"last boot {_fmt(meta.get('boot_time'))} (uptime {meta.get('uptime', '?')})", STY["subtitle"])]) + [
         Paragraph(f"Report: <b>{ctx.settings.get('report_kind', 'standard')}</b>"
                   + (", with sub-interface detail" if ctx.settings.get("subinterfaces") else "")
-                  + (" - run with --extended for drops/errors, interfaces, IPsec VPN, TLS and Decryption and capacity"
-                     if ctx.settings.get("report_kind") == "standard" else ""), STY["subtitle"]),
+, STY["subtitle"]),
         Paragraph(f"{len(ctx.ds.dps)} dataplanes - " + (f"DP sections for each of them, one part per DP"
                   if ctx.settings.get("all_dps_doc") else f"DP sections for <b>{meta.get('dp')}</b>"), STY["subtitle"])
         if ctx.ds.dps and not ctx.ds.nodes else Spacer(1, 0),
@@ -362,20 +337,9 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
         shown = [(i, f) for i, f in shown if f[0] != "info" or not any(f[1].endswith(d) for d in dps)]
         front.append(Paragraph(f"Warnings and notices of all {len(parts)} DPs; the info lines per DP are in "
                                "findings.txt.", STY["small"]))
-    # warnings and notices whose analysis is only in the extended report: a bold note on top, a tag on each line
-    x_only = [i for i, f in shown if i in ctx.x_only and f[0] in ("warning", "notice")]
-    if x_only:
-        areas = ", ".join(dict.fromkeys(ctx.findings[i][1] for i in x_only))
-        counts = [f"{c} {lv}{'s' if c != 1 else ''}" for lv in ("warning", "notice")
-                  if (c := sum(ctx.findings[i][0] == lv for i in x_only))]
-        front.append(Paragraph(f"<b>{' and '.join(counts)} below ({areas}) {'is' if len(x_only) == 1 else 'are'} "
-                               "analysed in detail only in the extended report - run with -x for the causes, the "
-                               "time line and what to check.</b>", STY["body"]))
     for i, (level, sec, text) in sorted(shown, key=lambda f: order.get(f[1][0], 3)):
         col = LEVEL_COL.get(level, "#52514e")
-        tag = " <b>[details: -x only]</b>" if i in x_only else ""
-        front.append(Paragraph(f"<font color='{col}'><b>{level.upper()}</b></font> &nbsp;<i>{sec}</i> - {text}{tag}",
-                               STY["find"]))
+        front.append(Paragraph(f"<font color='{col}'><b>{level.upper()}</b></font> &nbsp;<i>{sec}</i> - {text}", STY["find"]))
     if ctx.ds.notes:
         front.append(Spacer(1, 6))
         for n in ctx.ds.notes:

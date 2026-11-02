@@ -41,6 +41,7 @@ from pathlib import Path
 
 from . import __version__
 from . import config as C
+from . import section_names as SN
 
 log = logging.getLogger("pan-ngfw-load")
 _stop = False
@@ -243,7 +244,7 @@ def _settings(cfg, args) -> dict:
 def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: str, anon=None,
                   settings: dict | None = None) -> list:
     from .report import Ctx, build_pdf
-    from .sections import EXTENDED, EXTENDED_ONLY, PROFILES, SECTIONS
+    from .sections import PROFILES, SECTIONS
     if anon is not None:
         for d in {id(x): x for x in [ds, *ds.nodes.values()]}.values():
             anon.apply(d)
@@ -259,17 +260,14 @@ def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: s
         raise SystemExit(f"unknown section(s): {', '.join(unknown)} - known: {', '.join(SECTIONS)}")
     ctx = Ctx(ds=ds, outdir=outdir, settings=settings or {})
     ctx.settings.setdefault("report_kind", "custom selection" if sections else
-                            {"standard": "standard", "load": "standard", "extended": "extended"}.get(profile, profile))
+                            {"load": "standard", "extended": "standard"}.get(profile, profile))
     if anon is not None:
         ctx.find("info", "Anonymization", anon.summary())
-    # standard report: the sections only in the extended report still run, for their warnings and notices
-    silent = [SECTIONS[n] for n in EXTENDED if n in EXTENDED_ONLY and n not in names] \
-        if ctx.settings["report_kind"] == "standard" else []
     pdf = outdir / f"{ds.meta.get('hostname', 'device')}_{outdir.name}.pdf"
     if ds.nodes:
-        _build_cluster_pdf(ctx, names, pdf, title, silent)
+        _build_cluster_pdf(ctx, names, pdf, title)
     else:
-        build_pdf(ctx, [SECTIONS[n] for n in names], pdf, title, silent=silent)
+        build_pdf(ctx, [SECTIONS[n] for n in names], pdf, title)
     if anon is not None:  # belt and braces: findings are built from anonymized data already
         ctx.findings = [(l, a, anon.text(t)) for l, a, t in ctx.findings]
     # findings may carry PDF markup (<b>, &nbsp;) - plain text for findings.txt/json and the terminal
@@ -284,7 +282,7 @@ def _write_report(ds, outdir: Path, profile: str, sections: str | None, title: s
     return findings
 
 
-def _build_cluster_pdf(ctx, names: list, pdf: Path, title: str, silent: list | None = None) -> None:
+def _build_cluster_pdf(ctx, names: list, pdf: Path, title: str) -> None:
     """Cluster report: whole-cluster sections, then one part per node (DP sections for its busiest DP and the
     health of its chassis), then the remaining whole-cluster sections."""
     from .report import build_pdf
@@ -306,7 +304,12 @@ def _build_cluster_pdf(ctx, names: list, pdf: Path, title: str, silent: list | N
                       "health of this chassis")
              for n, d in ds.nodes.items()] if mods else []
     build_pdf(ctx, [SECTIONS[n] for n in head], pdf, title, parts=parts, select_dp=select,
-              tail=[SECTIONS[n] for n in tail], silent=silent)
+              tail=[SECTIONS[n] for n in tail])
+
+
+def _sel(args) -> str:
+    """Folder suffix of a report with only some sections (-s): it must not replace the full report."""
+    return "_" + "-".join(args.sections.split(",")) if getattr(args, "sections", None) else ""
 
 
 def _link_latest(parent: Path, target: Path) -> None:
@@ -331,10 +334,11 @@ def cmd_report(cfg, args) -> int:
         ds.meta.setdefault("hostname", dev.name)
         anon = _anonymizer(ds, args, "firewall")
         parent = (args.out or cfg.report_dir) / (anon.alias if anon else dev.name)
-        out = parent / f"{datetime.now():%Y%m%d_%H%M}_live_{days:g}d{'_anon' if anon else ''}"
+        out = parent / f"{datetime.now():%Y%m%d_%H%M}_live_{days:g}d{'_anon' if anon else ''}{_sel(args)}"
         findings = _write_report(ds, out, args.profile, args.sections, "Dataplane & CPU load analysis (live)", anon,
                                  _settings(cfg, args))
-        _link_latest(parent, out)
+        if not args.sections:  # 'latest' is the latest full report
+            _link_latest(parent, out)
         st = load_state(ddir)
         st["last_report"] = datetime.now().isoformat(timespec="seconds")
         save_state(ddir, st)
@@ -361,9 +365,9 @@ def cmd_tsf(cfg, args) -> int:
     anon = _anonymizer(ds, args, "firewall")
     if anon:
         when = ds.meta.get("tsf_time") or datetime.fromtimestamp(bundle.root.stat().st_mtime)
-        out = (args.out or cfg.report_dir) / anon.alias / f"tsf_{anon.bundle_name(bundle.name, when)}_anon"
+        out = (args.out or cfg.report_dir) / anon.alias / f"tsf_{anon.bundle_name(bundle.name, when)}_anon{_sel(args)}"
     else:
-        out = (args.out or cfg.report_dir) / host / f"tsf_{bundle.name}"
+        out = (args.out or cfg.report_dir) / host / f"tsf_{bundle.name}{_sel(args)}"
     settings = _settings(cfg, args)
     findings = _write_report(ds, out, args.profile, args.sections, "Dataplane & CPU load analysis (tech support file)",
                              anon, settings)
@@ -386,9 +390,9 @@ def _cmd_tsf_cluster(cfg, args) -> int:
     anon = _anonymizer(ds, args, "firewall")
     when = ds.meta.get("tsf_time") or datetime.now()
     if anon:
-        out = (args.out or cfg.report_dir) / anon.alias / f"tsf_cluster_{when:%Y%m%d_%H%M}_anon"
+        out = (args.out or cfg.report_dir) / anon.alias / f"tsf_cluster_{when:%Y%m%d_%H%M}_anon{_sel(args)}"
     else:
-        out = (args.out or cfg.report_dir) / ds.meta.get("hostname", "cluster") / f"tsf_cluster_{when:%Y%m%d_%H%M}"
+        out = (args.out or cfg.report_dir) / ds.meta.get("hostname", "cluster") / f"tsf_cluster_{when:%Y%m%d_%H%M}{_sel(args)}"
     findings = _write_report(ds, out, args.profile, args.sections,
                              "Dataplane & CPU load analysis - NGFW cluster (tech support files)", anon, _settings(cfg, args))
     for f in findings:
@@ -592,11 +596,12 @@ def main(argv=None) -> int:
     ap.add_argument("-v", "--verbose", action="store_true", help="show progress in the terminal and log debug details")
     ap.add_argument("-a", "--anonymize", dest="pre_anonymize", action="store_true",
                     help="anonymized report - same as -a after 'tsf' or 'report'")
-    ap.add_argument("-x", "--extended", dest="pre_extended", action="store_true",
-                    help="extended report - same as -x after 'tsf' or 'report'")
     ap.add_argument("--subinterfaces", dest="pre_subinterfaces", action="store_true",
                     help="detailed statistics of every sub-interface and VLAN interface - same as --subinterfaces "
                          "after 'tsf' or 'report'")
+    ap.add_argument("-s", "--sections", dest="pre_sections", metavar="NAME[,NAME...]",
+                    help="report with only these sections - same as -s after 'tsf' or 'report'. "
+                         "List the section names: pan-ngfw-load -s list")
     ap.add_argument("-V", "--version", action="version",
                     version=f"pan-ngfw-load {__version__}" + ("" if live else " (TSF-only)") + "\n" + DISCLAIMER)
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="command", title="commands")
@@ -609,14 +614,14 @@ def main(argv=None) -> int:
                        help="replace hostname, serial number and the device's own IP addresses in the report")
         p.add_argument("--alias", help="name used instead of the hostname with --anonymize (default: firewall)")
         p.add_argument("-o", "--out", type=Path, help="output base directory (default: report_dir)")
-        p.add_argument("-x", "--extended", action="store_true",
-                       help="extended report: adds drops/errors, interfaces, IPsec VPN and capacity")
         p.add_argument("--subinterfaces", action="store_true",
                        help="add a detailed table of every sub-interface and VLAN interface (zone, VLAN, traffic, "
                             "drops) to the Interfaces section - in any report")
         p.add_argument("-p", "--profile", default="standard",
-                       help="section profile: standard (default), extended, dp")
-        p.add_argument("-s", "--sections", help="comma-separated sections, overrides --profile")
+                       help="section profile: standard (default, all sections), dp (dataplane sections only)")
+        p.add_argument("-s", "--sections", metavar="NAME[,NAME...]",
+                       help="only these sections, e.g. -s decryption,interfaces (names: see below, or -s list); "
+                            "overrides --profile. The report goes to its own folder, named after the sections")
         p.add_argument("--spike-threshold", type=float, metavar="POINTS",
                        help="core spike: load points above the median of the other DP cores (default: config, 10)")
         p.add_argument("--spike-min-duration", metavar="DURATION",
@@ -644,11 +649,13 @@ def main(argv=None) -> int:
         p.add_argument("--until", help="'YYYY/MM/DD HH:MM:SS' (default: now)")
         p.add_argument("--type", choices=["traffic", "threat", "decryption"], help="default: log_types from config")
         p.add_argument("--filter", help="extra PAN-OS log filter, e.g. \"app eq 'dns-base'\"")
-        p = sub.add_parser("report", help="build a report for the last N days into report_dir")
+        p = sub.add_parser("report", help="build a report for the last N days into report_dir",
+                           epilog=SN.help_text(), formatter_class=argparse.RawDescriptionHelpFormatter)
         dev_arg(p)
         p.add_argument("--days", type=float, help="time window (default: report_days; 0 = everything)")
         report_args(p)
-    p = sub.add_parser("tsf", help="analyse a tech support file (.tgz or extracted directory)")
+    p = sub.add_parser("tsf", help="analyse a tech support file (.tgz or extracted directory)",
+                       epilog=SN.help_text(), formatter_class=argparse.RawDescriptionHelpFormatter)
     # several TSFs = the nodes of an NGFW cluster (PA-7500): not advertised, see dataset.build_cluster
     p.add_argument("bundle", type=Path, nargs="+", help="techsupport .tgz or extracted directory")
     report_args(p)
@@ -682,21 +689,28 @@ def main(argv=None) -> int:
         cmd = next(a for a in argv[:3] if a in LIVE_CMDS)
         raise SystemExit(f"pan-ngfw-load: '{cmd}' is part of the live collector, which this TSF-only installation "
                          "does not include.\nTo add it, run install.sh again without --tsf-only (config and reports are kept).")
+    for i, a in enumerate(argv[:-1]):  # '-s list' (anywhere, with or without a command): print the names
+        if a in ("-s", "--sections") and argv[i + 1] == "list":
+            print(SN.help_text())
+            return 0
     args = ap.parse_args(argv)
+    if args.pre_sections:
+        if not hasattr(args, "sections"):
+            ap.error(f"-s/--sections only applies to {'tsf and report' if live else 'tsf'}, not to '{args.cmd}'")
+        args.sections = args.sections or args.pre_sections
     if args.pre_anonymize:  # 'pan-ngfw-load -a tsf x.tgz' works like 'pan-ngfw-load tsf -a x.tgz'
         if not hasattr(args, "anonymize"):
             ap.error(f"-a/--anonymize only applies to {'tsf and report' if live else 'tsf'}, not to '{args.cmd}'")
         args.anonymize = True
-    if args.pre_extended:
-        if not hasattr(args, "extended"):
-            ap.error(f"-x/--extended only applies to {'tsf and report' if live else 'tsf'}, not to '{args.cmd}'")
-        args.extended = True
     if args.pre_subinterfaces:
         if not hasattr(args, "subinterfaces"):
             ap.error(f"--subinterfaces only applies to {'tsf and report' if live else 'tsf'}, not to '{args.cmd}'")
         args.subinterfaces = True
-    if getattr(args, "extended", False) and args.profile == "standard":
-        args.profile = "extended"
+    if getattr(args, "sections", None):  # before anything is read or written
+        try:
+            args.sections = ",".join(SN.parse(args.sections))
+        except ValueError as e:
+            ap.error(str(e))
 
     cfg = C.load(args.config)
     if args.cmd not in ("init", "status", "cron", "tsf", "capacity") and not cfg.path.exists():
