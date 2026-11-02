@@ -245,7 +245,7 @@ def build(ctx):
             pr.append((theme, name, val(name), c.description.get(name, "") if "description" in c else ""))
     pr = pd.DataFrame(pr, columns=["area", "counter", "since boot", "meaning"]).drop_duplicates("counter")
     if not pr.empty:
-        out += [ctx.h2("What went wrong"),
+        out += [ctx.new_page(), ctx.h2("What went wrong"),
                 ctx.small("Proxy and TLS counters above zero since the last boot ('show counter global', description "
                           "from PAN-OS)."),
                 ctx.table(pr, [3.2, 5.4, 2.0, 6.4], fmt={"since boot": lambda v: f"{v:,.0f}"}, max_rows=40)]
@@ -487,7 +487,7 @@ def _episodes(ctx, gauge: pd.DataFrame, lim_sess) -> list:
     ds.meta["tls_window"] = (t0, t1)
     dur = lambda d: (f"{d.total_seconds() / 3600:.1f} h" if d >= pd.Timedelta(hours=2)
                      else f"{d.total_seconds() / 60:.0f} min")
-    out = [ctx.h2("Episodes"),
+    out = [ctx.new_page(), ctx.h2("Episodes"),
            ctx.small("Periods with clearly more TLS/SSL failures than usual (a 10-minute interval counts when a failure "
                      f"counter has at least {EPISODE_MIN_SESSIONS} failed sessions - "
                      f"{EPISODE_MIN['proxy_tunnel_taildrop']:,} dropped packets for the proxy queue - and "

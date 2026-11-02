@@ -21,6 +21,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (BaseDocTemplate, Frame, Image, KeepTogether, NextPageTemplate, PageBreak, PageTemplate,
                                 Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle)
+from reportlab.platypus.flowables import CondPageBreak
 from reportlab.platypus.tableofcontents import TableOfContents
 
 from . import __version__
@@ -98,6 +99,7 @@ class Ctx:
         return Paragraph(t, STY["h1p" if self._part_no else "h1"])
     def h2(self, t): return Paragraph(t, STY["h2p" if self._part_no else "h2"])
     def h3(self, t): return Paragraph(t, STY["h3"])
+    def new_page(self): return NewPage((self.page[1] - TOP_MARGIN - BOTTOM_MARGIN) * 0.9)
     def p(self, t): return Paragraph(t, STY["body"])
     def small(self, t): return Paragraph(t, STY["small"])
 
@@ -232,13 +234,19 @@ def _footer(meta, page=A4):
 LEAD_STYLES = {"h1", "h2", "h3", "h1p", "h2p", "s"}  # headings and the small lead-in lines above tables
 
 
+class NewPage(CondPageBreak):
+    """A sub-section that starts on a new page (Ctx.new_page) - unless the page is still almost empty. Left out with
+    --page-per-section."""
+
+
 def _is_lead(f) -> bool:
     return isinstance(f, Paragraph) and f.style.name in LEAD_STYLES
 
 
 def keep_leads_with_content(items: list) -> list:
-    """Never leave a heading (or a lead-in line) alone at the bottom of a page: bind it, plus any
-    paragraphs that follow it, to the next chart or table. Applies to every section."""
+    """Never leave a heading (or a lead-in line) alone at the bottom of a page: bind it, plus any paragraphs that
+    follow it, to the next chart or table. A heading followed by text only is bound to its first paragraph - binding
+    a long text would move all of it to the next page. Applies to every section."""
     out, i = [], 0
     while i < len(items):
         if not _is_lead(items[i]):
@@ -249,10 +257,16 @@ def keep_leads_with_content(items: list) -> list:
         while j < len(items) and isinstance(items[j], Paragraph):
             group.append(items[j])
             j += 1
-        if j < len(items) and not isinstance(items[j], PageBreak):
+        if j < len(items) and not isinstance(items[j], (PageBreak, Spacer)):
             group.append(items[j])
             j += 1
-        out.append(KeepTogether(group))
+        elif len(group) > 2:  # text only: the heading and its first paragraph stay together, the rest flows
+            j = i + 2
+            group = group[:2]
+        # a nested KeepTogether reports a huge height (by design) - inside the group it would force a page break
+        # every time, so its parts join the group directly
+        flat = [x for g in group for x in (g._content if isinstance(g, KeepTogether) else [g])]
+        out.append(KeepTogether(flat))
         i = j
     return out
 
@@ -430,7 +444,7 @@ def _long_pages(flows: list, page, foot) -> tuple[list, list]:
         for f in items:
             if isinstance(f, KeepTogether):
                 yield from flat(f._content)
-            else:
+            elif not isinstance(f, NewPage):
                 yield f
     chunks = [[]]
     for f in flat(flows):
