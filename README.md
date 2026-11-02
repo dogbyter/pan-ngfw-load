@@ -38,7 +38,7 @@ The report goes to `~/pan-ngfw-load/reports/<hostname>/tsf_<file>/`:
 
 | File | Content |
 |---|---|
-| `<hostname>_tsf_<file>.pdf` | the report - summary of findings, a contents page with links to the sections (also as PDF bookmarks), the sections, appendix |
+| `<hostname>_tsf_<file>.pdf` | the report - summary of findings, a contents page with links to the sections (also as PDF bookmarks; left out when a report built with `-s` has fewer than four sections), the sections, appendix |
 | `<hostname>_tsf_<file>.html` | with `--format html` or `both`: the same report as one continuous HTML file - charts embedded, no other files needed |
 | `findings.txt`, `findings.json` | the summary of findings (info / notice / warning) |
 | `charts/*.png` | every chart of the report |

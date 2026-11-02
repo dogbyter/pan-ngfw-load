@@ -38,7 +38,8 @@ PAPER = {"a4": A4, "letter": LETTER, "legal": LEGAL}
 # the left margin leaves room for punching/binding, the right one only what printers need (about 5 mm)
 LEFT_MARGIN, RIGHT_MARGIN = 1.6 * cm, 1.0 * cm
 TOP_MARGIN, BOTTOM_MARGIN = 1.5 * cm, 1.6 * cm
-MAX_PAGE_HEIGHT = 14000  # points, just under 200 inches - the largest page many PDF viewers (Acrobat) accept
+MAX_PAGE_HEIGHT = 14000
+MIN_TOC_SECTIONS = 4  # fewer sections (e.g. -s decryption): no contents page  # points, just under 200 inches - the largest page many PDF viewers (Acrobat) accept
 
 
 def content_cm(page) -> float:
@@ -281,6 +282,8 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
     base_ds = ctx.ds
     part = {}
 
+    built = []  # sections with content
+
     def run(mod):
         """DP sections (DP_SCOPED True: one DP; 'partly': some findings from one DP's time series) name the DP they
         cover - in the title and in their findings; inside a part, the findings carry the part's label."""
@@ -303,6 +306,7 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
         if flow:
             body.extend(flow)
             body.append(PageBreak())
+            built.append(mod)
 
     for mod in sections:
         run(mod)
@@ -368,13 +372,16 @@ def build_pdf(ctx: Ctx, sections: list, path: Path, title: str, layout_log: list
                        leftIndent=0, spaceBefore=4),
         ParagraphStyle("toc1", parent=STY["body"], fontSize=8.5, leading=11.5, leftIndent=14, textColor=INK2),
     ]
-    front += [Paragraph("Contents", STY["toc_title"]), toc, PageBreak()]
+    with_toc = len(built) >= MIN_TOC_SECTIONS or bool(parts)
+    if with_toc:
+        front += [Paragraph("Contents", STY["toc_title"]), toc, PageBreak()]
 
     out_fmt = str(ctx.settings.get("format", "pdf")).lower()
     if out_fmt in ("html", "both"):  # the same content as one continuous, self-contained HTML file
         from . import html_report
         html_report.write(front, body, title, f"{meta.get('hostname', '?')} - {meta.get('bundle', '')} - "
-                                              f"pan-ngfw-load {__version__}", path.with_suffix(".html"))
+                                              f"pan-ngfw-load {__version__}", path.with_suffix(".html"),
+                          with_toc=with_toc)
     if out_fmt == "html":
         return
     flows = front + keep_leads_with_content(body)

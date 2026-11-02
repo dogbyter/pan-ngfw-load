@@ -121,7 +121,7 @@ class _Writer:
             # Spacer, PageBreak, TableOfContents: no meaning in a continuous page
 
 
-def write(front: list, body: list, title: str, footer: str, path: Path) -> Path:
+def write(front: list, body: list, title: str, footer: str, path: Path, with_toc: bool = True) -> Path:
     """front: title page and summary flowables, body: the sections (as built for the PDF)."""
     w = _Writer()
     w.walk(front)
@@ -135,7 +135,7 @@ def write(front: list, body: list, title: str, footer: str, path: Path) -> Path:
            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
            f"<title>{html.escape(title)}</title><style>{CSS}</style></head><body><main>"
            + "".join(head)
-           + (f'<nav class="toc"><b>Contents</b><ol>{toc}</ol></nav>' if toc else "")
+           + (f'<nav class="toc"><b>Contents</b><ol>{toc}</ol></nav>' if toc and with_toc else "")
            + "".join(w.out)
            + f"<footer>{html.escape(footer)}</footer></main></body></html>")
     path.write_text(doc, encoding="utf-8")
