@@ -693,6 +693,14 @@ def main(argv=None) -> int:
         if a in ("-s", "--sections") and argv[i + 1] == "list":
             print(SN.help_text())
             return 0
+    for i, a in enumerate(argv):  # '-s' without names would swallow the command or the TSF path as its value
+        if a in ("-s", "--sections") or re.fullmatch(r"-[avy]+s", a):
+            nxt = argv[i + 1] if i + 1 < len(argv) else None
+            if (nxt is None or nxt.startswith("-") or nxt in sub.choices or "/" in nxt
+                    or re.search(r"\.(tgz|tar\.gz|tar)$", nxt) or Path(nxt).exists()):
+                raise SystemExit("pan-ngfw-load: -s/--sections needs one or more section names, "
+                                 "e.g. -s decryption or -s decryption,interfaces\n"
+                                 "List the section names: pan-ngfw-load -s list")
     args = ap.parse_args(argv)
     if args.pre_sections:
         if not hasattr(args, "sections"):
