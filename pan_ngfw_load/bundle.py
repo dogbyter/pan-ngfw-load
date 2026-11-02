@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,11 +42,15 @@ def extract(tgz: Path, dest_root: Path) -> Path:
     if dest.is_dir() and any(dest.iterdir()):
         return dest
     dest.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(tgz) as tf:
-        if hasattr(tarfile, "data_filter"):
-            tf.extractall(dest, filter=_safe_filter)  # skips absolute paths, links out of tree, devices
-        else:  # pragma: no cover - very old Python
-            tf.extractall(dest)
+    try:
+        with tarfile.open(tgz) as tf:
+            if hasattr(tarfile, "data_filter"):
+                tf.extractall(dest, filter=_safe_filter)  # skips absolute paths, links out of tree, devices
+            else:  # pragma: no cover - very old Python
+                tf.extractall(dest)
+    except (tarfile.TarError, EOFError, OSError):
+        shutil.rmtree(dest, ignore_errors=True)  # no half-extracted bundle for the next run to reuse
+        raise SystemExit(f"Not a readable tech support file: {tgz}") from None
     return dest
 
 
@@ -62,7 +67,9 @@ class Bundle:
 
     @classmethod
     def open(cls, path: Path, extract_root: Path) -> "Bundle":
-        path = path.resolve()
+        path = Path(path).expanduser().resolve()
+        if not path.exists():
+            raise SystemExit(f"TSF not found or not reachable: {path}")
         if path.is_file():
             root = extract(path, extract_root)
             name = _stem(path)
@@ -80,6 +87,8 @@ class Bundle:
                 b.dp_logs[d.parts[-4] + d.parts[-3]] = files
         b.sar_text = sorted((root / "var/log/sa").glob("sar[0-9]*"))
         b.crashinfo = sorted((root / "opt/panlogs/cores/crashinfo").glob("*"))
+        if not (b.cli_dump or b.dp_monitor or b.mp_monitor or b.dp_logs):
+            raise SystemExit(f"No tech support file content found in: {path}")
         return b
 
     def inventory(self) -> dict[str, str]:

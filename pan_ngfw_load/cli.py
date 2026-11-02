@@ -349,12 +349,12 @@ def cmd_report(cfg, args) -> int:
 
 
 def cmd_tsf(cfg, args) -> int:
-    from . import dataset
     from .bundle import Bundle
     warnings.simplefilter("ignore", FutureWarning)
     if len(args.bundle) > 1:
         return _cmd_tsf_cluster(cfg, args)
-    bundle = Bundle.open(args.bundle[0], cfg.data_dir / "bundles")
+    bundle = Bundle.open(args.bundle[0], cfg.data_dir / "bundles")  # before the slow imports: bad paths fail fast
+    from . import dataset
     ds = dataset.build(bundle, dp=args.dp)
     if args.all_dps and not ds.dps:
         raise SystemExit("--all-dps: this firewall has a single dataplane - the report covers it already")
