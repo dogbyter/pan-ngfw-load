@@ -16,7 +16,7 @@ import pandas as pd
 
 from . import knowledge as K
 from .bundle import Bundle, _dp_key
-from .parsers import monitor, powperf, resmon, sar, simple
+from .parsers import monitor, powperf, resmon, sar, simple, storage
 from .parsers.cli import CliDump, parse_clock, parse_kv, parse_uptime, split_dp
 
 WINDOW_NAMES = {1: "second", 60: "minute", 3600: "hour", 86400: "day", 604800: "week"}
@@ -369,6 +369,7 @@ def _from_cli(ds: Dataset) -> None:
                          ("vpn_sa", "show vpn ipsec-sa", simple.ipsec_sa)):
         if (txt := d.get(cmd)):
             ds.t[key] = fn(txt)
+    _storage(ds, d)
     cfgd = sorted((ds.bundle.root / "var/log/pan").glob("configd.log*"), key=lambda x: x.name.endswith(".old"),
                   reverse=True)  # older file first
     if cfgd:
@@ -399,6 +400,21 @@ def _from_cli(ds: Dataset) -> None:
     if members:
         ae = pd.DataFrame(sorted(members.items(), key=lambda kv: (kv[1], kv[0])), columns=["interface", "ae"])
         ds.t["ae_members"] = ae.merge(lc.drop(columns=["ae"]), on="interface", how="left")
+
+
+def _storage(ds: Dataset, d: CliDump) -> None:
+    """SSD SMART data, file-system checks at boot and storage errors in the kernel log."""
+    rows = [r for c in d.commands() if c.startswith("debug system disk-smart-info")
+            if (r := storage.smart(d.get(c) or "", c.split()[-1])) is not None]
+    if rows:
+        ds.t["smart"] = pd.DataFrame(rows, columns=storage.SMART_COLS).drop_duplicates("disk", keep="last")
+    log = ds.bundle.root / "var/log"
+    fs = storage.fsck(log / "pan/panlogs-partition.log", log / "dmesg", ds.meta.get("boot_time"))
+    if not fs.empty:
+        ds.t["fsck"] = fs
+    if (log / "dmesg").is_file() or (log / "messages").is_file():
+        ds.t["storage_errors"] = storage.kernel_errors([log / "dmesg", *sorted(log.glob("messages*"))])
+        ds.meta["kernel_log"] = True  # scanned - an empty table means no errors
 
 
 def _scale(ds: Dataset, d) -> None:

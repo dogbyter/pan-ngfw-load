@@ -67,7 +67,7 @@ The report has all of these sections; a section is left out only when there is n
 | Capacity | measured peaks against the model's limits, and how much more traffic the dataplane takes at the current mix before it reaches 80% |
 | Configuration against model limits | rules in effect, objects, zones, routers, interfaces, VLAN tags, ARP/neighbor/MAC/route tables, tunnels, User-ID, sessions - each against its limit; limits the firewall reports itself come first, datasheet values from your capacity files |
 | Management plane | MP CPU over 30 days, CPU split, processes with their meaning and over time, memory, MP network interfaces, load average |
-| Health and stability | last boot, crash reports, processes, HA pair, hardware sensors, disk space, lost logs |
+| Health and stability | last boot, crash reports, processes, HA pair, hardware sensors, disk space, storage health (SSD SMART data, file-system checks at boot, disk errors in the kernel log - tech support files only), lost logs |
 | Appendix | method and caveats |
 
 ### How far back a TSF reaches
