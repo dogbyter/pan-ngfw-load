@@ -109,6 +109,8 @@ def fig(w=W, h=3.0):
 
 def time_axis(ax, span_days: float):
     lo, hi = ax.dataLim.intervalx
+    if not np.isfinite(span_days):  # empty series: NaT - NaT
+        span_days = hi - lo if np.isfinite(lo) and np.isfinite(hi) else 0
     if np.isfinite(lo) and np.isfinite(hi) and hi - lo < 1 / 288:  # single point / tiny range: matplotlib would pad +-2 years
         mid = (lo + hi) / 2
         ax.set_xlim(mid - 1 / 24, mid + 1 / 24)

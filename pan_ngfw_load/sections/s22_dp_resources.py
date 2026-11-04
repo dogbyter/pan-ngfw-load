@@ -105,18 +105,19 @@ def build(ctx):
         w = wk.pivot_table(index="end", columns="res", values="value").sort_index()
         w = w[(w.fillna(0) > 0).any(axis=1)]  # the week of the reboot reports 0 for everything
         names = [K.RESOURCES[m][0] for m in metrics if m in w.columns]
-        cmap = C.colors_for(names)
-        f, ax = C.fig(C.W, 2.3)
-        for m in metrics:
-            if m in w.columns:
-                ax.plot(w.index, w[m], color=cmap[K.RESOURCES[m][0]], marker="o", markersize=3, lw=1.2,
-                        label=K.RESOURCES[m][0])
-        ax.set_ylim(0, 105)
-        ax.set_ylabel("% of pool (weekly max)")
-        ax.set_title("Per week: peak use of each pool")
-        C.time_axis(ax, (w.index.max() - w.index.min()).total_seconds() / 86400)
-        C.legend_below(ax, len(names))
-        out.append(ctx.figure(f, "resources_week"))
+        if len(w) >= 2 and names:  # a chart needs two weeks with data
+            cmap = C.colors_for(names)
+            f, ax = C.fig(C.W, 2.3)
+            for m in metrics:
+                if m in w.columns:
+                    ax.plot(w.index, w[m], color=cmap[K.RESOURCES[m][0]], marker="o", markersize=3, lw=1.2,
+                            label=K.RESOURCES[m][0])
+            ax.set_ylim(0, 105)
+            ax.set_ylabel("% of pool (weekly max)")
+            ax.set_title("Per week: peak use of each pool")
+            C.time_axis(ax, (w.index.max() - w.index.min()).total_seconds() / 86400)
+            C.legend_below(ax, len(names))
+            out.append(ctx.figure(f, "resources_week"))
 
     # --- counters: did anything run out? ------------------------------------------
     if ds.has("counters_boot"):
