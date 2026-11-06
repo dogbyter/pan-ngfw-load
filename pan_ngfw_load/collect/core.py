@@ -192,17 +192,36 @@ def take_sample(cfg: Config, dev: Device, api: Api, diag: Api | None) -> tuple[P
 
 
 def export_logs(cfg: Config, dev: Device, api: Api, log_type: str, since: datetime, until: datetime,
-                query_filter: str | None = None, max_logs: int = 2_000_000, stop=lambda: False) -> tuple[int, str | None]:
+                query_filter: str | None = None, max_logs: int = 2_000_000, stop=lambda: False,
+                known_until: str | None = None) -> tuple[int, str | None]:
     """Export logs in [since, until] to a new CSV.gz. Pages backwards in time (newest first),
     moving the upper bound down; duplicates in the same second are skipped by seqno.
-    Returns (count, newest receive_time seen)."""
+    known_until: receive_time up to which an earlier export has the logs - a file with nothing newer is not kept.
+    Returns (count of logs newer than known_until, newest receive_time seen)."""
     fields = list(dict.fromkeys(LOG_FIELDS.get(log_type) or (TRAFFIC_FIELDS if log_type == "traffic" else THREAT_FIELDS)))
     out_dir = cfg.device_dir(dev.name) / "logs"
     out_dir.mkdir(exist_ok=True)
     s_since, s_until = since.strftime(TS_FMT), until.strftime(TS_FMT)
     out = out_dir / f"{log_type}_{since:%Y%m%d_%H%M%S}_{until:%Y%m%d_%H%M%S}.csv.gz"
     tmp = out.with_suffix(".tmp")
-    seen, total, upper, newest = set(), 0, s_until, None
+    try:
+        _total, fresh, newest = _export_pages(api, log_type, fields, tmp, s_since, s_until, query_filter, max_logs, stop,
+                                             known_until, dev.name)
+    except BaseException:
+        tmp.unlink(missing_ok=True)  # a cut-off export leaves no half-written file; the next run fetches it again
+        raise
+    if fresh:
+        tmp.replace(out)
+    else:
+        tmp.unlink()
+    return fresh, newest
+
+
+def _export_pages(api: Api, log_type: str, fields: list[str], tmp: Path, s_since: str, upper: str,
+                  query_filter: str | None, max_logs: int, stop, known_until: str | None,
+                  name: str) -> tuple[int, int, str | None]:
+    """Write the log pages to tmp -> (logs written, logs newer than known_until, newest receive_time)."""
+    seen, total, fresh, newest = set(), 0, 0, None
     with gzip.open(tmp, "wt", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
         w.writeheader()
@@ -224,18 +243,16 @@ def export_logs(cfg: Config, dev: Device, api: Api, log_type: str, since: dateti
                 seen.add(sq)
                 w.writerow({f: e.findtext(f, "") for f in fields})
                 new += 1
+                if known_until is None or rt > known_until:
+                    fresh += 1
             total += new
-            log.info("%s %s logs: +%d (total %d), reached %s", dev.name, log_type, new, total, oldest)
+            log.info("%s %s logs: +%d (total %d), reached %s", name, log_type, new, total, oldest)
             if len(entries) < 5000 or new == 0:
                 if new == 0 and len(entries) == 5000:
-                    log.warning("%s: more than 5000 %s logs in one second - some may be missing", dev.name, log_type)
+                    log.warning("%s: more than 5000 %s logs in one second - some may be missing", name, log_type)
                 break
             upper = oldest
-    if total:
-        tmp.replace(out)
-    else:
-        tmp.unlink()
-    return total, newest
+    return total, fresh, newest
 
 
 def incremental_logs(cfg: Config, dev: Device, api: Api, stop=lambda: False) -> dict[str, int]:
@@ -250,7 +267,7 @@ def incremental_logs(cfg: Config, dev: Device, api: Api, stop=lambda: False) -> 
             since = datetime.strptime(last[lt], TS_FMT) - timedelta(minutes=5)
         else:
             since = now - timedelta(seconds=cfg.log_initial)
-        n, newest = export_logs(cfg, dev, api, lt, since, now, stop=stop)
+        n, newest = export_logs(cfg, dev, api, lt, since, now, stop=stop, known_until=last.get(lt))
         if newest:
             last[lt] = newest
         result[lt] = n

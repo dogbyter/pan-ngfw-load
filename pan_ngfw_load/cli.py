@@ -446,8 +446,12 @@ def cmd_prune(cfg, args) -> int:
             if old(p, cfg.retain_samples):
                 removed += 1
                 args.dry_run or shutil.rmtree(p)
+        for p in (ddir / "logs").glob("*.tmp"):  # left by an export that was killed (power loss, kill -9)
+            if old(p, 86400):
+                removed += 1
+                args.dry_run or p.unlink()
         for p in (ddir / "logs").glob("*.csv*"):
-            if old(p, cfg.retain_logs):
+            if p.suffix != ".tmp" and old(p, cfg.retain_logs):
                 removed += 1
                 args.dry_run or p.unlink()
     for ddir in cfg.report_dir.glob("*"):
